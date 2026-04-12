@@ -10,8 +10,8 @@ Paperlint reads a paper, searches for defects against a rubric of 30 failure mod
 
 The pipeline has four stages:
 
-1. **Discovery** — reads the paper end-to-end, finds every potential defect
-2. **Extractor** — converts the findings into structured data
+1. **Discovery** — reads the paper end-to-end, finds every potential defect, outputs structured findings with exact evidence quotes
+2. **Quote Verification** — programmatic check that every quoted passage actually exists in the source document. Findings with unverifiable evidence are dropped before reaching the gate.
 3. **Gate** — challenges each finding, searching for reasons the author wrote it that way on purpose. Rejects aggressively. A false positive damages the credibility of every true positive around it.
 4. **Evaluation** — assembles the surviving findings into a per-paper evaluation
 
@@ -41,15 +41,14 @@ Evaluate an entire mailing:
 python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-processes 10
 ```
 
-The output is one JSON file per paper (`evaluation.json`) containing the paper's metadata, a summary, findings with locations, and citation references back to the source document. For batch runs, an `index.json` summarizes the mailing with per-committee paper lists and finding counts.
+The output is one JSON file per paper (`evaluation.json`) containing the paper's metadata, a summary, findings with evidence quotes verified against the source, and references. For batch runs, an `index.json` summarizes the mailing with per-committee paper lists and finding counts.
 
 ## Environment
 
-Paperlint requires API keys for two providers:
+Paperlint requires one API key:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...    # Discovery (Anthropic Citations API)
-export OPENROUTER_API_KEY=sk-or-...    # All other steps (OpenRouter)
+export OPENROUTER_API_KEY=sk-or-...
 ```
 
 Or create a `.env` file in the working directory. See `.env.example`.
@@ -66,7 +65,7 @@ Paperlint does not speak for WG21. It is not an official tool of the committee, 
 
 It does not evaluate the quality, importance, or likelihood of success of any proposal. It does not recommend for or against adoption. It does not assess design choices, alternatives, or trade-offs.
 
-It uses AI (Claude, via the Anthropic and OpenRouter APIs) to perform the analysis. The AI reads the paper, applies the rubric, and produces structured findings. The prompts that drive the analysis are in this repository and are open for inspection.
+It uses AI (Claude, via the OpenRouter API) to perform the analysis. The AI reads the paper, applies the rubric, and produces structured findings. The prompts that drive the analysis are in this repository and are open for inspection.
 
 ## Repository structure
 
@@ -81,7 +80,7 @@ paperlint/
   rubric.md            # 30 failure modes across 4 axes
   prompts/
     1-discovery.md     # "Find every defect"
-    2-verification-gate.md  # "Find the author's reason"
+    2-verification-gate.md  # "Reject everything that isn't a real defect"
     3-evaluation-writer.md  # "State what was found"
   docs/
     design.md          # Pipeline architecture and output schema

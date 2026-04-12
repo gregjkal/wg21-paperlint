@@ -2,7 +2,7 @@
 
 _Internal design reference for audit and review. This document describes how the pipeline works — it is not part of the public-facing product._
 
-_Last updated April 11, 2026._
+_Last updated April 12, 2026._
 
 ---
 
@@ -19,30 +19,22 @@ Step 0: METADATA
   │
   ▼
 Step 1: DISCOVERY
-  Model: Opus 4.6 via Anthropic API (Citations enabled)
-  Input: raw paper — HTML as text/plain, PDF as application/pdf base64
+  Model: Opus 4.6 via OpenRouter (JSON mode + thinking)
+  Input: clean extracted text
   Prompt: prompts/1-discovery.md + rubric.md
-  Output: free-form markdown with citation anchors from API
-  Note: only step that is NOT JSON mode (Citations API constraint)
+  Output: JSON {findings: [{number, title, category, defect, correction,
+          axiom, evidence: [{location, quote}]}]}
   │
   ▼
-Step 1b: EXTRACTOR
-  Model: Sonnet 4.6 via OpenRouter (JSON mode)
-  Input: Discovery free-form output
-  Output: JSON array of findings {number, title, category, location,
-          quoted_text, defect, correction, axiom}
-  │
-  ▼
-Step 1c: CITATION MAPPING (compute, no model)
-  Input: Extractor findings + Discovery block spans
-  Output: findings with attached citation positions (start_char, end_char)
-  Method: anchored regex on #### Finding N: headings, block-start rule
-  Validated: 581/581 headings across 78 production runs, zero false positives
+Step 1b: QUOTE VERIFICATION (compute, no model)
+  Input: findings + source text
+  Method: substring match — each evidence quote verified against source
+  Output: findings with unverifiable evidence dropped
   │
   ▼
 Step 2: GATE
   Model: Opus 4.6 via OpenRouter (JSON mode + thinking)
-  Input: JSON findings + paper text for context
+  Input: verified findings + paper text for context
   Prompt: prompts/2-verification-gate.md
   Output: JSON verdicts {finding_number, verdict, reason}
   │
@@ -52,47 +44,59 @@ Step 3: EVALUATION WRITER
   Input: PASSed findings + metadata
   Prompt: prompts/3-evaluation-writer.md
   Output: JSON {summary, findings[{location, description}]}
-  Note: does NOT produce references — those come from Step 1 citations
   │
   ▼
 Step 4: ASSEMBLY (compute, no model)
-  Input: metadata (0) + citations (1c) + verdicts (2) + eval (3)
+  Input: metadata (0) + verified evidence (1b) + verdicts (2) + eval (3)
   Output: evaluation.json — single deliverable file per paper
 ```
 
 ---
 
-## Provenance
+## Evidence Model
 
-Discovery always receives the **original source format**:
-- HTML papers: `media_type: "text/plain"`, raw HTML
-- PDF papers: `media_type: "application/pdf"`, base64-encoded bytes
+Each finding carries an array of evidence — exact quotes from the source document with their locations:
 
-The Citations API returns character-span references into the source as provided. These reference the ground truth document — not a conversion or derivative.
+```json
+"evidence": [
+  {"location": "§16.4.6.17, item (1.1)", "quote": "error category objects (19.5.3.5)"},
+  {"location": "§16.4.6.17, item (1.2)", "quote": "time zone database (19.5.3.5)"}
+]
+```
 
-Text extraction (`extract_text()`) is used **only** for the metadata step where Sonnet needs clean text to read front matter. It is never fed to Discovery.
+Each quote is programmatically verified as a substring of the source text before reaching the Gate. Findings with no verifiable evidence are dropped automatically — the Gate never sees them.
 
 ---
 
 ## JSON Mode
 
-Every pipeline step except Discovery uses JSON mode (`response_format: {"type": "json_object"}` on OpenRouter). Models return structured JSON parsed with `json.loads()`. No regex parsing of LLM output anywhere in the pipeline.
+Every pipeline step uses JSON mode (`response_format: {"type": "json_object"}` on OpenRouter). Models return structured JSON parsed with `json.loads()`. No regex parsing of LLM output anywhere in the pipeline.
 
-**OpenRouter fence handling:** OpenRouter wraps Anthropic JSON mode responses in code fences. `strip_openrouter_json()` removes fences before parsing. Handles both fenced and unfenced responses.
+**OpenRouter fence handling:** OpenRouter wraps Anthropic JSON mode responses in code fences. `_strip_fences()` removes fences before parsing.
 
-**Discovery exception:** The Citations API requires free-form text output to attach citation anchors. The Extractor (Step 1b) converts Discovery's free-form output to structured JSON via a model call — a model reads model output, not regex.
+---
+
+## Text Extraction
+
+| Source | Function | Library | Used by |
+|--------|----------|---------|---------|
+| HTML | `extract_html()` | `html.parser` (stdlib) | Metadata, Discovery |
+| PDF | `extract_pdf()` | `pymupdf` | Metadata, Discovery |
+
+Text extraction produces clean text with front matter at the top. Both Metadata and Discovery receive extracted text.
 
 ---
 
 ## Models
 
-| Step | Model | Provider | Mode | Why |
-|------|-------|----------|------|-----|
-| Metadata | Sonnet 4.6 | OpenRouter | JSON | Cheap, fast, reads front matter |
-| Discovery | Opus 4.6 | Anthropic | Citations + thinking | Needs Citations API for provenance |
-| Extractor | Sonnet 4.6 | OpenRouter | JSON | Structured extraction, not reasoning |
-| Gate | Opus 4.6 | OpenRouter | JSON + thinking | Hard reasoning — "find the author's reason" |
-| Eval Writer | Opus 4.6 | OpenRouter | JSON + thinking | Synthesis — writes what authors read |
+| Step | Model | Provider | Mode |
+|------|-------|----------|------|
+| Metadata | Sonnet 4.6 | OpenRouter | JSON |
+| Discovery | Opus 4.6 | OpenRouter | JSON + thinking |
+| Gate | Opus 4.6 | OpenRouter | JSON + thinking |
+| Eval Writer | Opus 4.6 | OpenRouter | JSON + thinking |
+
+All calls route through OpenRouter. Single API provider.
 
 ---
 
@@ -104,17 +108,18 @@ Every pipeline step except Discovery uses JSON mode (`response_format: {"type": 
 {
   "schema_version": "1",
   "paperlint_sha": "abc123def456",
+  "prompt_hash": "f25b0f1067fd",
   "paper": "P3642R4",
   "title": "Carry-less product: std::clmul",
   "authors": ["Jan Schultke"],
   "audience": "LEWG",
   "paper_type": "wording",
   "abstract": "Summary of what the paper proposes...",
-  "generated": "2026-04-11T01:30:00Z",
-  "model": "claude-opus-4-6",
-  "findings_discovered": 8,
-  "findings_passed": 6,
-  "findings_rejected": 2,
+  "generated": "2026-04-12T...",
+  "model": "anthropic/claude-opus-4.6",
+  "findings_discovered": 16,
+  "findings_passed": 9,
+  "findings_rejected": 7,
   "summary": "Evaluation summary...",
   "findings": [
     {
@@ -126,9 +131,9 @@ Every pipeline step except Discovery uses JSON mode (`response_format: {"type": 
   "references": [
     {
       "number": 1,
-      "cited_text": "exact text from paper",
-      "start_char": 12345,
-      "end_char": 12400
+      "location": "§5.2",
+      "quote": "exact text from paper",
+      "verified": true
     }
   ]
 }
@@ -140,25 +145,17 @@ Every pipeline step except Discovery uses JSON mode (`response_format: {"type": 
 {
   "schema_version": "1",
   "paperlint_sha": "abc123def456",
+  "prompt_hash": "f25b0f1067fd",
   "mailing_id": "2026-02",
-  "generated": "2026-04-11T06:00:00Z",
+  "generated": "2026-04-12T...",
   "total_papers": 81,
   "succeeded": 80,
   "failed": 1,
   "rooms": {
-    "LEWG": {
-      "papers": ["P3642R4", "P2929R2"],
-      "total_findings": 11
-    }
+    "LEWG": {"papers": ["P3642R4"], "total_findings": 9}
   },
   "papers": [
-    {
-      "paper": "P3642R4",
-      "title": "Carry-less product: std::clmul",
-      "audience": "LEWG",
-      "findings_passed": 6,
-      "findings_discovered": 8
-    }
+    {"paper": "P3642R4", "audience": "LEWG", "findings_passed": 9, "findings_discovered": 16}
   ]
 }
 ```
@@ -169,29 +166,29 @@ Every pipeline step except Discovery uses JSON mode (`response_format: {"type": 
 {output_dir}/{paper_id}/
 ├── evaluation.json        # the deliverable
 ├── meta.json              # Step 0: metadata
-├── 1-discovery-raw.md     # Step 1: Discovery free-form output
-├── 1-discovery-debug.txt  # Step 1: citation debug info
-├── 2-findings.json        # Step 1b: structured findings
-├── 3-gate.json            # Step 2: verdicts
-└── 4-eval.json            # Step 3: Eval Writer output
+├── 1-findings.json        # Step 1: discovery findings with evidence
+├── 2-gate.json            # Step 2: verdicts
+└── 3-eval.json            # Step 3: evaluation writer output
 ```
+
+---
+
+## Versioning
+
+Each evaluation carries two identifiers:
+- **`paperlint_sha`** — git commit hash. Tracks which code produced this.
+- **`prompt_hash`** — hash of prompt + rubric file contents. Changes only when evaluation logic changes.
+
+Rerun rule: prompt_hash changed → full rerun. Unchanged → skip.
 
 ---
 
 ## Invocation
 
 ```bash
-# Single paper
 python -m paperlint eval P3642R4 --output-dir ./output/
-
-# Single paper from local file
 python -m paperlint eval ./papers/p3642r4.html --output-dir ./output/
-
-# Batch — entire mailing
 python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-processes 10
-
-# All OpenRouter (no Anthropic API needed, no citations)
-python -m paperlint eval P3642R4 --output-dir ./output/ --all-openrouter
 ```
 
 ---
@@ -199,10 +196,9 @@ python -m paperlint eval P3642R4 --output-dir ./output/ --all-openrouter
 ## Dependencies
 
 ```
-anthropic          # Anthropic API (Discovery + Citations)
-openai             # OpenRouter API (Gate, Eval Writer, Metadata, Extractor)
+openai             # OpenRouter API (all model calls)
 python-dotenv      # .env loading
-pymupdf            # PDF text extraction (metadata step only)
+pymupdf            # PDF text extraction
 beautifulsoup4     # HTML parsing (mailing page scraper)
 requests           # HTTP (paper fetching, mailing scraper)
 ```
@@ -212,18 +208,17 @@ requests           # HTTP (paper fetching, mailing scraper)
 ## Environment
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...     # Discovery (Anthropic Citations API)
-OPENROUTER_API_KEY=sk-or-...     # All other steps (OpenRouter)
+OPENROUTER_API_KEY=sk-or-...
 ```
 
 ---
 
 ## Known Limitations
 
-- **Context window:** Papers exceeding ~200K tokens cannot be processed by Discovery in a single call.
+- **Context window:** Papers exceeding ~200K tokens cannot be processed in a single Discovery call.
 - **PDF metadata:** `pymupdf` text extraction is good but not perfect on all WG21 PDF formats.
-- **Non-determinism:** Same paper run twice may produce different findings. Discovery's recall varies. The Gate provides precision consistency — what passes is reliably correct, but the set of candidates varies.
-- **Citation coverage:** Not all Discovery runs produce API citations. When citations are absent, the Extractor's `quoted_text` field provides fallback provenance.
+- **Non-determinism:** Same paper run twice may produce different findings. The Gate provides precision consistency — what passes is reliably correct, but the set of candidates varies.
+- **Quote verification:** Substring matching. Handles whitespace normalization but not OCR-quality issues in PDFs where extracted text doesn't match the visual content.
 
 ---
 
@@ -232,7 +227,7 @@ OPENROUTER_API_KEY=sk-or-...     # All other steps (OpenRouter)
 | Stage | File | Role |
 |-------|------|------|
 | Discovery | `prompts/1-discovery.md` | Find every mechanically verifiable defect |
-| Gate | `prompts/2-verification-gate.md` | Challenge findings — find the author's reason |
+| Gate | `prompts/2-verification-gate.md` | Reject everything that isn't a real defect |
 | Eval Writer | `prompts/3-evaluation-writer.md` | Assemble findings into evaluation |
 | Rubric | `rubric.md` | 30 failure modes across 4 axes |
 
