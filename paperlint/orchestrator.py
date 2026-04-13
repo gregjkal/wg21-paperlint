@@ -41,15 +41,15 @@ OPENROUTER_SONNET = "anthropic/claude-sonnet-4.6"
 SCHEMA_VERSION = "1"
 
 THINKING_BUDGET = {
-    "discovery": 40_000,
-    "gate": 40_000,
-    "summary": 5_000,
+    "discovery": 128_000,
+    "gate": 128_000,
+    "summary": 8_000,
 }
 
 MAX_TOKENS = {
-    "discovery": 64_000,
-    "gate": 32_000,
-    "summary": 2_048,
+    "discovery": 128_000,
+    "gate": 128_000,
+    "summary": 4_096,
 }
 
 PROMPTS_DIR = _PKG_ROOT / "prompts"
