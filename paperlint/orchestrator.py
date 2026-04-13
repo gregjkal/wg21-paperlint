@@ -42,14 +42,14 @@ SCHEMA_VERSION = "1"
 
 THINKING_BUDGET = {
     "discovery": 40_000,
-    "gate": 5_000,
-    "eval_writer": 5_000,
+    "gate": 40_000,
+    "summary": 5_000,
 }
 
 MAX_TOKENS = {
     "discovery": 64_000,
-    "gate": 8_192,
-    "eval_writer": 8_192,
+    "gate": 32_000,
+    "summary": 2_048,
 }
 
 PROMPTS_DIR = _PKG_ROOT / "prompts"
@@ -482,30 +482,43 @@ def step_gate(client: openai.OpenAI, paper_text: str,
         "Return ONLY the JSON."
     )
 
-    response = _call_with_retry(
-        client, "Gate",
-        model=OPENROUTER_MODEL,
-        max_tokens=MAX_TOKENS["gate"],
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt + json_instruction},
-            {"role": "user", "content": user_content},
-        ],
-        extra_body={
-            "thinking": {
-                "type": "enabled",
-                "budget_tokens": THINKING_BUDGET["gate"],
+    parsed = None
+    for attempt in range(2):
+        response = _call_with_retry(
+            client, "Gate",
+            model=OPENROUTER_MODEL,
+            max_tokens=MAX_TOKENS["gate"],
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt + json_instruction},
+                {"role": "user", "content": user_content},
+            ],
+            extra_body={
+                "thinking": {
+                    "type": "enabled",
+                    "budget_tokens": THINKING_BUDGET["gate"],
+                },
             },
-        },
-    )
+        )
 
-    _log_usage("Gate", response, THINKING_BUDGET["gate"])
+        _log_usage("Gate", response, THINKING_BUDGET["gate"])
 
-    raw = _extract_text(response)
-    if not raw.strip():
-        raise RuntimeError(f"paperlint [Gate] Empty response for {meta.paper}")
+        raw = _extract_text(response)
+        if not raw.strip():
+            if attempt == 0:
+                print("  Retrying Gate (empty response, attempt 2)...")
+                continue
+            raise RuntimeError(f"paperlint [Gate] Empty response for {meta.paper}")
 
-    parsed = _parse_json(raw, f"Gate paper={meta.paper}")
+        try:
+            parsed = _parse_json(raw, f"Gate paper={meta.paper}")
+            break
+        except json.JSONDecodeError:
+            if attempt == 0:
+                print("  Retrying Gate (JSON parse failed, attempt 2)...")
+            else:
+                raise
+
     verdicts = parsed.get("verdicts", [])
 
     gated: list[GatedFinding] = []
