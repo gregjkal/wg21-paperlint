@@ -309,7 +309,7 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
     )
 
     parsed = None
-    for attempt in range(2):
+    for attempt in range(3):
         response = _call_with_retry(
             client, "Discovery",
             model=OPENROUTER_MODEL,
@@ -483,7 +483,7 @@ def step_gate(client: openai.OpenAI, paper_text: str,
     )
 
     parsed = None
-    for attempt in range(2):
+    for attempt in range(3):
         response = _call_with_retry(
             client, "Gate",
             model=OPENROUTER_MODEL,
