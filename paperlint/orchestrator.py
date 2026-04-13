@@ -402,10 +402,11 @@ def step_verify_quotes(findings: list[Finding], source_text: str) -> list[Findin
                 all_verified = False
             print(f"    #{f.number} [{status}] \"{ev.quote[:60]}\"")
 
-        if any(ev.verified for ev in f.evidence):
+        if all(ev.verified for ev in f.evidence):
             verified_findings.append(f)
         else:
-            print(f"    #{f.number} DROPPED — no verifiable evidence")
+            unverified = sum(1 for ev in f.evidence if not ev.verified)
+            print(f"    #{f.number} DROPPED — {unverified} unverifiable quote(s)")
 
     dropped = len(findings) - len(verified_findings)
     if dropped:
