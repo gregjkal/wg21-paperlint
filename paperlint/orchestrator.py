@@ -41,13 +41,13 @@ OPENROUTER_SONNET = "anthropic/claude-sonnet-4.6"
 SCHEMA_VERSION = "1"
 
 THINKING_BUDGET = {
-    "discovery": 25_000,
+    "discovery": 40_000,
     "gate": 5_000,
     "eval_writer": 5_000,
 }
 
 MAX_TOKENS = {
-    "discovery": 32_000,
+    "discovery": 64_000,
     "gate": 8_192,
     "eval_writer": 8_192,
 }
@@ -306,27 +306,46 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
         f"Analyze this paper for objective defects per the rubric."
     )
 
-    response = _call_with_retry(
-        client, "Discovery",
-        model=OPENROUTER_MODEL,
-        max_tokens=MAX_TOKENS["discovery"],
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        extra_body={
-            "thinking": {
-                "type": "enabled",
-                "budget_tokens": THINKING_BUDGET["discovery"],
+    parsed = None
+    for attempt in range(2):
+        response = _call_with_retry(
+            client, "Discovery",
+            model=OPENROUTER_MODEL,
+            max_tokens=MAX_TOKENS["discovery"],
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            extra_body={
+                "thinking": {
+                    "type": "enabled",
+                    "budget_tokens": THINKING_BUDGET["discovery"],
+                },
             },
-        },
-    )
+        )
 
-    _log_usage("Discovery", response, THINKING_BUDGET["discovery"])
+        _log_usage("Discovery", response, THINKING_BUDGET["discovery"])
 
-    raw = _extract_text(response)
-    parsed = _parse_json(raw, "Discovery")
+        raw = _extract_text(response)
+        try:
+            parsed = _parse_json(raw, "Discovery")
+            break
+        except json.JSONDecodeError:
+            if attempt == 0:
+                print("  Retrying Discovery (JSON parse failed, attempt 2)...")
+                user_content = (
+                    f"<paper title=\"{meta.paper} — {meta.title}\" "
+                    f"target_group=\"{meta.target_group}\" "
+                    f"authors=\"{', '.join(meta.authors)}\">\n"
+                    f"{clean_text}\n"
+                    f"</paper>\n\n"
+                    f"Analyze this paper for objective defects per the rubric.\n\n"
+                    f"IMPORTANT: Return ONLY a valid JSON object. No markdown. No explanation."
+                )
+            else:
+                raise
+
     raw_findings = parsed.get("findings", [])
 
     findings: list[Finding] = []
