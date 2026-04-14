@@ -182,7 +182,21 @@ def extract_html(path: str) -> str:
 
 
 def extract_pdf(path: str) -> str:
-    """Extract clean text from a PDF paper using pymupdf."""
+    """Extract clean text from a PDF paper.
+
+    Tries docling (ML-based, preserves document structure) first,
+    falls back to pymupdf (raw text dump).
+    Credit: fallback pattern from cppdigest/wg21-paper-markdown-converter.
+    """
+    try:
+        from docling.document_converter import DocumentConverter
+        converter = DocumentConverter()
+        result = converter.convert(path)
+        md = result.document.export_to_markdown()
+        if md and len(md.strip()) > 100:
+            return md
+    except Exception:
+        pass
     import pymupdf
     doc = pymupdf.open(path)
     text = "\n".join(page.get_text() for page in doc)
