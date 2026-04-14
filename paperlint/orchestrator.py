@@ -477,9 +477,10 @@ def step_gate(client: openai.OpenAI, paper_text: str,
         "\n\n## Output Format\n\n"
         "Return ONLY a JSON object:\n"
         '{"verdicts": [\n'
-        '  {"finding_number": 1, "verdict": "PASS", "reason": "..."}\n'
+        '  {"finding_number": 1, "verdict": "PASS", "reason": "...", "judgment": false}\n'
         ']}\n'
         "verdict must be PASS, REJECT, or REFER.\n"
+        "judgment: true if reaching this verdict required judgment beyond mechanical verification, false if purely mechanical.\n"
         "Return ONLY the JSON."
     )
 
@@ -524,18 +525,28 @@ def step_gate(client: openai.OpenAI, paper_text: str,
 
     gated: list[GatedFinding] = []
     verdict_map = {v["finding_number"]: v for v in verdicts}
+    judgment_rejections = 0
     for f in findings:
         v = verdict_map.get(f.number, {"verdict": "REFER", "reason": "No verdict returned"})
+        verdict = v.get("verdict", "REFER").upper()
+        reason = v.get("reason", "")
+        used_judgment = v.get("judgment", False)
+        if verdict == "PASS" and used_judgment:
+            verdict = "REJECT"
+            reason = f"Auto-rejected: gate reported judgment was required. Original: {reason}"
+            judgment_rejections += 1
         gated.append(GatedFinding(
             finding=f,
-            verdict=v.get("verdict", "REFER").upper(),
-            reason=v.get("reason", ""),
+            verdict=verdict,
+            reason=reason,
         ))
 
     passed = [g for g in gated if g.verdict == "PASS"]
     rejected = [g for g in gated if g.verdict == "REJECT"]
     referred = [g for g in gated if g.verdict == "REFER"]
     print(f"  PASS: {len(passed)} | REJECT: {len(rejected)} | REFER: {len(referred)}")
+    if judgment_rejections:
+        print(f"  ({judgment_rejections} auto-rejected: PASS with judgment)")
     for g in gated:
         print(f"    #{g.finding.number}: {g.verdict} — {g.reason[:80]}")
 

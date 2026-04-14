@@ -374,18 +374,23 @@ but `that` still reads as singular — ambiguous antecedent.
 
 ---
 
-### 2.8 Malformed standardese clause
+### 2.8 Mechanically broken standardese clause
 
-Normative wording that uses wrong standardese conventions.
+Normative wording that violates deterministic rules of C++ standardese —
+where only one correct form exists, not where editorial style varies.
 
-**Check:** Does each Mandates/Preconditions/Effects/Returns clause
-follow WG21 conventions?
+**Check:** Does each clause use the correct C++ form for what it
+expresses? Are numbering sequences valid?
 
 **Look for:**
-- "Effects: Equivalent to: returns X" (stray keyword — should be `return`)
-- `is_void<T>` used as boolean instead of `is_void_v<T>`
-- Misordered paragraph/sub-item numbering
-- Malformed EBNF/BNF productions (premature terminators)
+- `is_void<T>` used as boolean instead of `is_void_v<T>` (type vs value trait form)
+- Misordered or duplicated paragraph/sub-item numbering
+- Malformed EBNF/BNF productions (premature terminators, missing symbols)
+- Stray keywords inside clause bodies (`returns` instead of `return` in Effects)
+
+**Not in scope:** Which clause heading a requirement belongs under
+(Effects vs Returns vs Remarks) is editorial discretion, not a
+mechanical error. Do not flag wording placement preferences.
 
 **Example:** `is_void<T> is true` — `is_void<T>` is a type, not a value.
 Should be `is_void_v<T>`.
