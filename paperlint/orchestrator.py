@@ -186,12 +186,17 @@ def _parse_json(raw: str, step: str = "") -> dict | list:
     stripped = _strip_fences(raw)
     try:
         return json.loads(stripped)
-    except json.JSONDecodeError as e:
-        label = step or "JSON"
-        print(f"paperlint [{label}] JSONDecodeError: {e}", file=sys.stderr)
-        preview = stripped[:800]
-        print(f"paperlint [{label}] raw: {repr(preview)}", file=sys.stderr)
-        raise
+    except json.JSONDecodeError:
+        try:
+            decoder = json.JSONDecoder()
+            result, _ = decoder.raw_decode(stripped)
+            return result
+        except json.JSONDecodeError as e:
+            label = step or "JSON"
+            print(f"paperlint [{label}] JSONDecodeError: {e}", file=sys.stderr)
+            preview = stripped[:800]
+            print(f"paperlint [{label}] raw: {repr(preview)}", file=sys.stderr)
+            raise
 
 
 # ---------------------------------------------------------------------------
