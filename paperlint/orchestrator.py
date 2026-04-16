@@ -679,15 +679,12 @@ def fetch_paper(paper_id: str, cache_dir: Path | None = None, source_url: str = 
 # ---------------------------------------------------------------------------
 
 def _write_eval_json(eval_json: dict, output_dir: Path, paper_id: str) -> None:
-    """Write evaluation.json to both the paper subdirectory and the flat output."""
+    """Write evaluation.json to the paper subdirectory."""
     paper_output_dir = output_dir / paper_id
     paper_output_dir.mkdir(parents=True, exist_ok=True)
 
     json_path = paper_output_dir / "evaluation.json"
     json_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    flat_path = output_dir / f"{paper_id}.json"
-    flat_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _base_eval_json(source_url: str, paper_id: str, mailing_meta: dict | None) -> dict:
@@ -771,6 +768,10 @@ def run_paper_eval(
 
     meta_path = paper_output_dir / "meta.json"
     meta_path.write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
+
+    # Persist extraction as paper.md — the ground truth for char offset references
+    paper_md_path = paper_output_dir / "paper.md"
+    paper_md_path.write_text(clean_text, encoding="utf-8")
 
     # Step 1: Discovery → Quote verification → Gate
     try:
@@ -862,7 +863,7 @@ def run_paper_eval(
     _write_eval_json(eval_json, output_dir, paper_id)
 
     print(f"\n{'=' * 60}")
-    print(f"Pipeline complete. Deliverable: {output_dir / f'{paper_id}.json'}")
+    print(f"Pipeline complete. Deliverable: {output_dir / paper_id}/evaluation.json + paper.md")
     print(f"{'=' * 60}")
 
     return eval_json
