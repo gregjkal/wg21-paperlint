@@ -173,13 +173,26 @@ class _PaperContentExtractor(HTMLParser):
         return cleaned.strip()
 
 
+_DIFF_DEL_RE = re.compile(r'\u00ab-.*?-\u00bb', re.DOTALL)
+_DIFF_INS_RE = re.compile(r'\u00ab\+(.*?)\+\u00bb', re.DOTALL)
+
+
+def _resolve_diff_markers(text: str) -> str:
+    """Resolve diff notation to post-edit state: keep insertions, drop deletions."""
+    text = _DIFF_DEL_RE.sub('', text)
+    text = _DIFF_INS_RE.sub(r'\1', text)
+    text = re.sub(r' {2,}', ' ', text)
+    return text
+
+
 def extract_html(path: str) -> str:
     """Extract clean text from an HTML paper."""
     with open(path, encoding="utf-8", errors="replace") as f:
         html = f.read()
     extractor = _PaperContentExtractor()
     extractor.feed(html)
-    return extractor.get_text()
+    text = extractor.get_text()
+    return _resolve_diff_markers(text)
 
 
 def extract_pdf(path: str) -> str:
