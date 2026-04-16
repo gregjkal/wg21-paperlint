@@ -37,7 +37,7 @@ For each potential defect, apply the self-test before recording it:
 2. **Can I state what it should say instead?** If not, it is not a finding.
 3. **Can I name the rule or reference that makes it wrong?** If not, it is not a finding.
 4. **Would two experts agree this is a defect?** If reasonable people could disagree, it is not a finding.
-5. **Is this a mechanical error or a judgment call?** If confirming it requires an opinion about the author's intent, style choices, or design decisions, it is not a finding.
+5. **Is this a mechanical error or a judgment call?** If confirming it requires an opinion about the author's intent, style choices, or design decisions, it is not a finding. **Exception:** Grammar and spelling errors are always mechanical. Subject-verb disagreement, wrong articles, plural mismatches, doubled words, and misspelled words have one correct form — do not suppress them under this criterion or criterion 4. The gate will reject anything genuinely debatable.
 
 ### Step 3: Record each finding
 
