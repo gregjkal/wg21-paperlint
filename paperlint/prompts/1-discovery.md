@@ -84,6 +84,9 @@ These are common patterns that look like defects but are not. Do not report them
 - **C++ semantic equivalences.** `if (p)` is idiomatic shorthand for `if (p != nullptr)`. `!container.empty()` is equivalent to `container.size() > 0`. Do not report textual differences between semantically identical C++ expressions.
 - **Reserved identifiers in proposals.** A standards proposal that uses `__double_underscore` names is proposing implementation-level features. The reserved prefix is intentional.
 - **WG21 editorial placeholders.** `20XXXXL`, `?.?`, `YYYYMML` in feature-test macros or cross-references are conventions, not errors.
+- **WG21 namespace qualification dropping.** After a paper establishes a namespace in prose (`simd::chunked_invoke`, `std::whatever`), subsequent code examples routinely drop the prefix. This is a deliberate WG21 convention for noise reduction, not an inconsistency.
+- **Standardese elision conventions.** Standards wording abstracts over mechanical operations the implementer fills in. When wording says `cat(Result)` and Result is a defined tuple, the unpacking is implicit by specification convention — not a missing step.
+- **Exposition-style concept notation.** When no actual C++ concept exists (e.g., no `std::is_complex_v`), authors use exposition-only notation in prose and then define the real concept in code. The textual mismatch between exposition and definition is intentional, not an inconsistency.
 - **Design decisions.** If the author chose one approach over another and you think the other is better, that is not a finding. The paper's design is the author's jurisdiction.
 
 ## What You Do Not Do

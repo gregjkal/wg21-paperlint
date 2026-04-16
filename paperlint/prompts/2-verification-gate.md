@@ -60,6 +60,9 @@ REJECT findings in these categories — they are not verified defects:
 - **C++ semantic equivalences.** `if (p)` is idiomatic shorthand for `if (p != nullptr)`. `!container.empty()` is equivalent to `container.size() > 0`. Textual differences between semantically identical C++ expressions are not defects. REJECT.
 - **Reserved identifiers in proposals.** A standards proposal using `__double_underscore` names is proposing implementation-level features. The reserved prefix is intentional.
 - **WG21 editorial placeholders.** `20XXXXL`, `?.?`, `YYYYMML` in feature-test macros or cross-references are conventions, not errors.
+- **WG21 namespace qualification dropping.** After a paper establishes a namespace in prose, code examples that drop the prefix are following WG21 convention. Not an inconsistency. REJECT.
+- **Standardese elision conventions.** Standards wording abstracts over mechanical operations (`cat(Result)` where Result is a tuple implies unpacking). Not a missing step. REJECT.
+- **Exposition-style concept notation.** Exposition-only notation in prose paired with actual concept definitions in code is intentional — the textual mismatch is by design. REJECT.
 - **Design decisions.** If the author chose one approach and the finding says another approach is better, that is not a defect.
 
 If you cannot mechanically confirm the defect: **REJECT.**
