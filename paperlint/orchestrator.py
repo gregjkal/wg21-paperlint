@@ -129,7 +129,6 @@ class PaperMeta:
     authors: list[str]
     target_group: str
     paper_type: str
-    abstract: str
     source_file: str
     run_timestamp: str
     model: str
@@ -231,8 +230,7 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
     meta_prompt = (
         "Read this WG21 paper and return ONLY a JSON object with these fields:\n\n"
         '{"title": "...", "authors": ["..."], "audience": "...", '
-        '"paper_type": "wording or proposal or directional", '
-        '"abstract": "2-3 sentence summary of what this paper proposes."}\n\n'
+        '"paper_type": "wording or proposal or directional"}\n\n'
         "Return ONLY the JSON."
     )
 
@@ -240,7 +238,6 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
     authors: list[str] = []
     audience = "Unknown"
     paper_type = "wording"
-    abstract = ""
 
     for attempt in range(1, 4):
         try:
@@ -260,7 +257,6 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
                 authors = [a.strip() for a in authors.split(",")]
             audience = parsed.get("audience", "Unknown")
             paper_type = parsed.get("paper_type", "wording")
-            abstract = parsed.get("abstract", "")
             if title != "Unknown" and audience != "Unknown":
                 break
         except Exception as e:
@@ -270,7 +266,7 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
 
     meta = PaperMeta(
         paper=paper_number, title=title, authors=authors,
-        target_group=audience, paper_type=paper_type, abstract=abstract,
+        target_group=audience, paper_type=paper_type,
         source_file=str(paper_path),
         run_timestamp=datetime.now(timezone.utc).isoformat(),
         model=OPENROUTER_MODEL,
@@ -577,7 +573,7 @@ def step_summary_writer(client: openai.OpenAI, meta: PaperMeta,
     json_instruction = (
         "\n\n## Output Format\n\n"
         "Return ONLY a JSON object:\n"
-        '{"summary": "2-3 sentence summary of what the paper proposes and what was found. Plain text."}\n\n'
+        '{"summary": "1-2 sentence characterization of what the evaluation found. Plain text."}\n\n'
         "Write ONLY the summary. Findings are assembled separately.\n"
         "Return ONLY the JSON."
     )
@@ -586,11 +582,11 @@ def step_summary_writer(client: openai.OpenAI, meta: PaperMeta,
         f"Paper: {meta.paper} — {meta.title}\n"
         f"Authors: {', '.join(meta.authors)}\n"
         f"Audience: {meta.target_group}\n"
-        f"Type: {meta.paper_type}\n"
-        f"Abstract: {meta.abstract}\n\n"
+        f"Type: {meta.paper_type}\n\n"
         f"Number of findings that passed verification: {n_findings}\n\n"
-        f"Write a 2-3 sentence summary of what this paper proposes. "
-        f"State what it does neutrally — do not use the author's persuasive framing."
+        f"Summarize what the evaluation found. Characterize the findings "
+        f"at the level of categories and sections — do not list each one. "
+        f"Do not describe what the paper proposes; the reader already knows."
     )
 
     response = _call_with_retry(
@@ -629,8 +625,13 @@ def _looks_like_doc_id(paper_ref: str) -> bool:
     return len(u) >= 2 and u[0] in ("P", "N") and u[1].isdigit()
 
 
-def fetch_paper(paper_id: str, cache_dir: Path | None = None) -> Path:
-    """Fetch a WG21 document by ID. Returns local file path."""
+def fetch_paper(paper_id: str, cache_dir: Path | None = None, source_url: str = "") -> Path:
+    """Fetch a WG21 document by ID. Returns local file path.
+
+    When *source_url* is provided (from the mailing index), it is used
+    directly — no year/extension guessing.  Falls back to the legacy
+    heuristic when source_url is empty (single-paper ``eval`` mode).
+    """
     import urllib.request
     import urllib.error
 
@@ -638,6 +639,17 @@ def fetch_paper(paper_id: str, cache_dir: Path | None = None) -> Path:
         cache_dir = Path.cwd() / ".paperlint_cache"
     paper_lower = paper_id.lower()
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if source_url:
+        filename = source_url.rsplit("/", 1)[-1].lower()
+        local = cache_dir / filename
+        if local.exists():
+            print(f"  Found cached: {local}")
+            return local
+        print(f"  Downloading: {source_url}")
+        urllib.request.urlretrieve(source_url, str(local))
+        print(f"  Downloaded: {local}")
+        return local
 
     for ext in [".html", ".pdf"]:
         local = cache_dir / f"{paper_lower}{ext}"
@@ -665,20 +677,77 @@ def fetch_paper(paper_id: str, cache_dir: Path | None = None) -> Path:
 # Main pipeline
 # ---------------------------------------------------------------------------
 
+def _write_eval_json(eval_json: dict, output_dir: Path, paper_id: str) -> None:
+    """Write evaluation.json to both the paper subdirectory and the flat output."""
+    paper_output_dir = output_dir / paper_id
+    paper_output_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = paper_output_dir / "evaluation.json"
+    json_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    flat_path = output_dir / f"{paper_id}.json"
+    flat_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _base_eval_json(source_url: str, paper_id: str, mailing_meta: dict | None) -> dict:
+    """Build the skeleton eval JSON with whatever metadata is available."""
+    if mailing_meta:
+        title = mailing_meta.get("title", "Unknown")
+        authors = mailing_meta.get("authors", [])
+        audience = mailing_meta.get("subgroup", "Unknown")
+    else:
+        title = "Unknown"
+        authors = []
+        audience = "Unknown"
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "paperlint_sha": _git_sha(),
+        "prompt_hash": _prompt_hash(),
+        "source_url": source_url,
+        "pipeline_status": "failed",
+        "paper": paper_id.upper(),
+        "title": title,
+        "authors": authors,
+        "audience": audience,
+        "paper_type": "",
+        "generated": datetime.now(timezone.utc).isoformat(),
+        "model": OPENROUTER_MODEL,
+        "findings_discovered": 0,
+        "findings_passed": 0,
+        "findings_rejected": 0,
+        "summary": "",
+        "findings": [],
+        "references": [],
+    }
+
+
 def run_paper_eval(
     paper_ref: str,
     *,
     output_dir: Path,
+    source_url: str = "",
+    mailing_meta: dict | None = None,
 ) -> dict:
-    """Evaluate one paper. Write evaluation.json to output_dir."""
-    paper_path = Path(paper_ref)
-    if paper_path.exists():
-        pass
-    elif _looks_like_doc_id(paper_ref):
-        print(f"Fetching {paper_ref}...")
-        paper_path = fetch_paper(paper_ref.upper())
-    else:
-        raise FileNotFoundError(paper_ref)
+    """Evaluate one paper. Always writes an evaluation.json, even on failure."""
+    paper_id = paper_ref.strip().upper() if _looks_like_doc_id(paper_ref) else Path(paper_ref).stem.upper()
+
+    # Fetch paper
+    try:
+        paper_path = Path(paper_ref)
+        if paper_path.exists():
+            pass
+        elif _looks_like_doc_id(paper_ref):
+            print(f"Fetching {paper_ref}...")
+            paper_path = fetch_paper(paper_ref.upper(), source_url=source_url)
+        else:
+            raise FileNotFoundError(paper_ref)
+    except Exception as e:
+        print(f"  FETCH FAILED: {paper_id} — {e}")
+        eval_json = _base_eval_json(source_url, paper_id, mailing_meta)
+        eval_json["summary"] = "This paper could not be evaluated due to a document retrieval issue."
+        _write_eval_json(eval_json, output_dir, paper_id)
+        return eval_json
 
     ensure_api_keys()
 
@@ -687,46 +756,57 @@ def run_paper_eval(
         api_key=os.environ["OPENROUTER_API_KEY"],
     )
 
-    paper_id = paper_path.stem
     paper_output_dir = output_dir / paper_id
     paper_output_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 0: Metadata
     clean_text, meta = step_metadata(paper_path, client)
     if meta.title == "Unknown":
-        print(f"\n  SKIPPED: {meta.paper} — metadata extraction failed.")
-        return {}
+        print(f"  METADATA FAILED: {paper_id}")
+        eval_json = _base_eval_json(source_url, paper_id, mailing_meta)
+        eval_json["summary"] = "This paper could not be evaluated due to a document processing issue."
+        _write_eval_json(eval_json, output_dir, paper_id)
+        return eval_json
 
     meta_path = paper_output_dir / "meta.json"
     meta_path.write_text(json.dumps(asdict(meta), indent=2), encoding="utf-8")
 
-    # Step 1: Discovery
-    findings = step_discovery(client, clean_text, meta)
+    # Step 1: Discovery → Quote verification → Gate
+    try:
+        findings = step_discovery(client, clean_text, meta)
 
-    findings_path = paper_output_dir / "1-findings.json"
-    findings_path.write_text(
-        json.dumps([asdict(f) for f in findings], indent=2, ensure_ascii=False),
-        encoding="utf-8")
-    print(f"  Written: {findings_path}")
+        findings_path = paper_output_dir / "1-findings.json"
+        findings_path.write_text(
+            json.dumps([asdict(f) for f in findings], indent=2, ensure_ascii=False),
+            encoding="utf-8")
+        print(f"  Written: {findings_path}")
 
-    # Step 1b: Quote verification
-    findings = step_verify_quotes(findings, clean_text)
+        findings = step_verify_quotes(findings, clean_text)
 
-    # Step 2: Gate
-    gated = step_gate(client, clean_text, meta, findings)
+        gated = step_gate(client, clean_text, meta, findings)
 
-    gate_path = paper_output_dir / "2-gate.json"
-    gate_path.write_text(json.dumps(
-        [{"finding_number": g.finding.number, "verdict": g.verdict, "reason": g.reason}
-         for g in gated], indent=2), encoding="utf-8")
+        gate_path = paper_output_dir / "2-gate.json"
+        gate_path.write_text(json.dumps(
+            [{"finding_number": g.finding.number, "verdict": g.verdict, "reason": g.reason}
+             for g in gated], indent=2), encoding="utf-8")
+
+    except Exception as e:
+        print(f"  ANALYSIS FAILED: {paper_id} — {e}")
+        eval_json = _base_eval_json(source_url, paper_id, mailing_meta)
+        eval_json["pipeline_status"] = "partial"
+        eval_json["title"] = meta.title
+        eval_json["authors"] = meta.authors
+        eval_json["audience"] = meta.target_group
+        eval_json["paper_type"] = meta.paper_type
+        eval_json["summary"] = "This paper could not be fully evaluated due to an analysis issue."
+        _write_eval_json(eval_json, output_dir, paper_id)
+        return eval_json
 
     # Step 3: Summary
     passed = [g for g in gated if g.verdict == "PASS"]
     summary = step_summary_writer(client, meta, len(passed))
 
-    # Step 4: Assembly — findings pass through from Discovery, unmodified
-    # References are numbered per quote, not per finding.
-    # Build references first, then attach reference numbers to findings.
+    # Step 4: Assembly
     references = []
     ref_counter = 1
     output_findings = []
@@ -760,12 +840,13 @@ def run_paper_eval(
         "schema_version": SCHEMA_VERSION,
         "paperlint_sha": _git_sha(),
         "prompt_hash": _prompt_hash(),
+        "source_url": source_url,
+        "pipeline_status": "complete",
         "paper": meta.paper,
         "title": meta.title,
         "authors": meta.authors,
         "audience": meta.target_group,
         "paper_type": meta.paper_type,
-        "abstract": meta.abstract,
         "generated": meta.run_timestamp,
         "model": meta.model,
         "findings_discovered": len(findings),
@@ -776,11 +857,7 @@ def run_paper_eval(
         "references": references,
     }
 
-    json_path = paper_output_dir / "evaluation.json"
-    json_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    flat_path = output_dir / f"{meta.paper}.json"
-    flat_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
+    _write_eval_json(eval_json, output_dir, paper_id)
 
     print(f"\n{'=' * 60}")
     print(f"Pipeline complete. Deliverable: {flat_path}")

@@ -26,9 +26,11 @@ from pathlib import Path
 from paperlint.orchestrator import run_paper_eval, _git_sha, _prompt_hash, SCHEMA_VERSION
 
 
-def _eval_one_paper(paper_ref: str, output_dir: Path) -> dict:
+def _eval_one_paper(paper_ref: str, output_dir: Path, source_url: str = "",
+                    mailing_meta: dict | None = None) -> dict:
     try:
-        result = run_paper_eval(paper_ref, output_dir=output_dir)
+        result = run_paper_eval(paper_ref, output_dir=output_dir,
+                                source_url=source_url, mailing_meta=mailing_meta)
         return {"paper": paper_ref, "status": "ok", "result": result}
     except Exception as e:
         traceback.print_exc()
@@ -96,7 +98,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from paperlint.mailing import fetch_mailing_paper_ids
+    from paperlint.mailing import fetch_papers_for_mailing
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -106,31 +108,67 @@ def cmd_run(args: argparse.Namespace) -> int:
     max_processes = args.max_processes
 
     print(f"Fetching paper list for mailing {mailing_id}...")
-    paper_ids = fetch_mailing_paper_ids(mailing_id)
+    papers = fetch_papers_for_mailing(mailing_id)
 
-    if not paper_ids:
+    if not papers:
         print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
         return 1
 
-    if max_cap > 0:
-        paper_ids = paper_ids[:max_cap]
+    # Persist mailing index as ground-truth record
+    mailings_dir = output_dir.parent / "mailings"
+    mailings_dir.mkdir(parents=True, exist_ok=True)
+    index_path = mailings_dir / f"{mailing_id}.json"
 
-    print(f"Processing {len(paper_ids)} papers with {max_processes} workers...")
+    existing_by_id = {}
+    if index_path.exists():
+        for entry in json.loads(index_path.read_text()):
+            existing_by_id[entry["paper_id"]] = entry
+
+    now = datetime.now(timezone.utc).isoformat()
+    merged = []
+    for p in papers:
+        if p["paper_id"] in existing_by_id:
+            merged.append(existing_by_id[p["paper_id"]])
+        else:
+            p["added"] = now
+            merged.append(p)
+    merged.sort(key=lambda e: e["paper_id"])
+    index_path.write_text(
+        json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    print(f"Mailing index: {index_path} ({len(merged)} papers)")
+
+    meta_by_id = {p["paper_id"]: p for p in merged}
+
+    if max_cap > 0:
+        papers = papers[:max_cap]
+
+    print(f"Processing {len(papers)} papers with {max_processes} workers...")
 
     results: list[dict] = []
 
     if max_processes == 1:
-        for paper_id in paper_ids:
-            result = _eval_one_paper(paper_id, output_dir)
+        for p in papers:
+            pid = p["paper_id"]
+            pm = meta_by_id.get(pid)
+            result = _eval_one_paper(pid, output_dir,
+                                     source_url=pm["url"] if pm else "",
+                                     mailing_meta=pm)
             results.append(result)
             status = "OK" if result["status"] == "ok" else "FAILED"
-            print(f"\n  [{status}] {paper_id}")
+            print(f"\n  [{status}] {pid}")
     else:
         with ThreadPoolExecutor(max_workers=max_processes) as executor:
-            futures = {
-                executor.submit(_eval_one_paper, pid, output_dir): pid
-                for pid in paper_ids
-            }
+            futures = {}
+            for p in papers:
+                pid = p["paper_id"]
+                pm = meta_by_id.get(pid)
+                f = executor.submit(
+                    _eval_one_paper, pid, output_dir,
+                    pm["url"] if pm else "",
+                    pm,
+                )
+                futures[f] = pid
             for future in as_completed(futures):
                 pid = futures[future]
                 result = future.result()
@@ -154,6 +192,45 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
+def cmd_mailing(args: argparse.Namespace) -> int:
+    """Fetch and persist the ground-truth mailing index."""
+    from paperlint.mailing import fetch_papers_for_mailing
+
+    mailing_id = args.mailing_id
+    output = Path(args.output)
+
+    print(f"Fetching mailing index for {mailing_id} from open-std.org...")
+    papers = fetch_papers_for_mailing(mailing_id)
+    if not papers:
+        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
+        return 1
+
+    existing_by_id = {}
+    if output.exists():
+        for entry in json.loads(output.read_text()):
+            existing_by_id[entry["paper_id"]] = entry
+
+    now = datetime.now(timezone.utc).isoformat()
+    merged = []
+    new_count = 0
+    for p in papers:
+        if p["paper_id"] in existing_by_id:
+            merged.append(existing_by_id[p["paper_id"]])
+        else:
+            p["added"] = now
+            merged.append(p)
+            new_count += 1
+    merged.sort(key=lambda e: e["paper_id"])
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(merged, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    print(f"Written {output}: {len(merged)} papers ({new_count} new, {len(merged) - new_count} existing)")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="paperlint",
@@ -171,12 +248,23 @@ def main() -> int:
     run_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
     run_parser.add_argument("--max-processes", type=int, default=10, help="Parallel workers")
 
+    mailing_parser = subparsers.add_parser("mailing", help="Fetch and persist a mailing index")
+    mailing_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
+    mailing_parser.add_argument("--output", default="mailings/{mailing_id}.json",
+                                help="Output path (default: mailings/{mailing_id}.json)")
+
     args = parser.parse_args()
+
+    if args.command == "mailing":
+        if "{mailing_id}" in args.output:
+            args.output = args.output.replace("{mailing_id}", args.mailing_id)
 
     if args.command == "eval":
         return cmd_eval(args)
     elif args.command == "run":
         return cmd_run(args)
+    elif args.command == "mailing":
+        return cmd_mailing(args)
     else:
         parser.print_help()
         return 1
