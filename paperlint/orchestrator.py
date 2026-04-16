@@ -59,7 +59,7 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10
 
 
-def _git_sha() -> str:
+def git_sha() -> str:
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
@@ -70,7 +70,7 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def _prompt_hash() -> str:
+def prompt_hash() -> str:
     files = sorted(PROMPTS_DIR.glob("*.md")) + [RUBRIC_PATH]
     content = b"".join(f.read_bytes() for f in files if f.exists())
     return hashlib.sha256(content).hexdigest()[:12]
@@ -143,12 +143,13 @@ def _call_with_retry(client: openai.OpenAI, step: str, **kwargs):
     for attempt in range(MAX_RETRIES):
         try:
             return client.chat.completions.create(**kwargs)
-        except openai.RateLimitError as e:
+        except (openai.RateLimitError, openai.APIConnectionError, openai.APITimeoutError) as e:
             if attempt == MAX_RETRIES - 1:
                 _log_error(step, e, model=model)
                 raise
             wait = RETRY_BASE_DELAY * (attempt + 1)
-            print(f"  [{step}] Rate limited. Waiting {wait}s ({attempt + 1}/{MAX_RETRIES})...")
+            label = type(e).__name__
+            print(f"  [{step}] {label}. Waiting {wait}s ({attempt + 1}/{MAX_RETRIES})...")
             time.sleep(wait)
         except Exception as e:
             _log_error(step, e, model=model)
@@ -702,8 +703,8 @@ def _base_eval_json(source_url: str, paper_id: str, mailing_meta: dict | None) -
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "paperlint_sha": _git_sha(),
-        "prompt_hash": _prompt_hash(),
+        "paperlint_sha": git_sha(),
+        "prompt_hash": prompt_hash(),
         "source_url": source_url,
         "pipeline_status": "failed",
         "paper": paper_id.upper(),
@@ -839,8 +840,8 @@ def run_paper_eval(
 
     eval_json = {
         "schema_version": SCHEMA_VERSION,
-        "paperlint_sha": _git_sha(),
-        "prompt_hash": _prompt_hash(),
+        "paperlint_sha": git_sha(),
+        "prompt_hash": prompt_hash(),
         "source_url": source_url,
         "pipeline_status": "complete",
         "paper": meta.paper,

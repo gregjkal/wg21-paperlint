@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-from paperlint.orchestrator import run_paper_eval, _git_sha, _prompt_hash, SCHEMA_VERSION
+from paperlint.orchestrator import run_paper_eval, git_sha, prompt_hash, SCHEMA_VERSION
 
 
 def _eval_one_paper(paper_ref: str, output_dir: Path, source_url: str = "",
@@ -65,8 +65,8 @@ def _build_index(output_dir: Path, mailing_id: str, results: list[dict]) -> dict
 
     index = {
         "schema_version": SCHEMA_VERSION,
-        "paperlint_sha": _git_sha(),
-        "prompt_hash": _prompt_hash(),
+        "paperlint_sha": git_sha(),
+        "prompt_hash": prompt_hash(),
         "mailing_id": mailing_id,
         "generated": datetime.now(timezone.utc).isoformat(),
         "total_papers": len(results),
@@ -105,7 +105,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     mailing_id = args.mailing_id
     max_cap = args.max_cap
-    max_processes = args.max_processes
+    max_processes = args.max_processes if args.max_processes is not None else args.max_workers
 
     print(f"Fetching paper list for mailing {mailing_id}...")
     papers = fetch_papers_for_mailing(mailing_id)
@@ -246,7 +246,8 @@ def main() -> int:
     run_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
     run_parser.add_argument("--output-dir", required=True, help="Output directory")
     run_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
-    run_parser.add_argument("--max-processes", type=int, default=10, help="Parallel workers")
+    run_parser.add_argument("--max-workers", type=int, default=10, help="Parallel workers")
+    run_parser.add_argument("--max-processes", type=int, default=None, help=argparse.SUPPRESS)
 
     mailing_parser = subparsers.add_parser("mailing", help="Fetch and persist a mailing index")
     mailing_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
