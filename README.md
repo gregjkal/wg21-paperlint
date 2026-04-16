@@ -38,10 +38,28 @@ python -m paperlint eval P3642R4 --output-dir ./output/
 Evaluate an entire mailing:
 
 ```bash
-python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-processes 10
+python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-workers 10
 ```
 
-The output is one JSON file per paper (`evaluation.json`) containing the paper's metadata, a summary, findings with evidence quotes verified against the source, and references. For batch runs, an `index.json` summarizes the mailing with per-committee paper lists and finding counts.
+Fetch and persist a mailing index (ground-truth paper metadata from open-std.org):
+
+```bash
+python -m paperlint mailing 2026-02
+```
+
+### Output
+
+Each paper produces a directory with two files:
+
+```
+{paper_id}/
+  evaluation.json   # findings, references with char offsets, metadata
+  paper.md          # canonical markdown extraction of the source paper
+```
+
+The `extracted_char_start` and `extracted_char_end` fields in each reference select the exact evidence text in `paper.md`. This pairing is the contract for front-end citation rendering.
+
+For batch runs, an `index.json` summarizes the mailing with per-committee paper lists and finding counts. A `mailings/{mailing_id}.json` persists the ground-truth paper index scraped from open-std.org.
 
 ## Environment
 
