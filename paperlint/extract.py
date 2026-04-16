@@ -217,8 +217,10 @@ def extract_pdf(path: str) -> str:
         md = result.document.export_to_markdown()
         if md and len(md.strip()) > 100:
             return html_mod.unescape(md)
-    except Exception:
-        pass
+    except Exception as e:
+        import sys
+        print(f"WARNING: docling failed for {path}, falling back to pymupdf: {e}",
+              file=sys.stderr)
     import pymupdf
     doc = pymupdf.open(path)
     text = "\n".join(page.get_text() for page in doc)
