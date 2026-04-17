@@ -218,7 +218,6 @@ def _build_meta(source_file: str) -> PaperMeta:
         authors=[],
         target_group="",
         paper_type="",
-        abstract="",
         source_file=source_file,
         run_timestamp="",
         model="",
