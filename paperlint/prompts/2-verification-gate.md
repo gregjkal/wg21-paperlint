@@ -10,6 +10,14 @@ Throughout this document, a **verified defect** means: an objective, mechanicall
 
 ---
 
+## The Paper's Form
+
+The paper you are verifying is a markdown conversion of the original PDF. The PDF-to-markdown extractor introduces a predictable set of visual artifacts that can look like defects but are extraction errors, not author errors. You must REJECT findings whose "defect" is actually an extraction artifact. The specific artifact classes appear in Step 2's REJECT list.
+
+Real grammar, spelling, and logic errors in ordinary prose are not extraction artifacts and should PASS when the evidence supports them. Step 4 has the guard against over-rejecting these.
+
+---
+
 ## The Principle
 
 A candidate finding has been presented to you. Another agent examined a WG21 paper and believes it found a defect. That agent was designed to be thorough — to find everything that could possibly be wrong. Many of its candidates will be verified defects. Some will not.
@@ -65,6 +73,13 @@ REJECT findings in these categories — they are not verified defects:
 - **Exposition-style concept notation.** Exposition-only notation in prose paired with actual concept definitions in code is intentional — the textual mismatch is by design. REJECT.
 - **Exposition-only identifiers.** When a paper marks an identifier as "exposition only," the absence of a concrete declaration is intentional. REJECT.
 - **Design decisions.** If the author chose one approach and the finding says another approach is better, that is not a defect.
+- **PDF extraction artifacts.** The paper was extracted from PDF to markdown. Findings whose defect is actually an extraction error, not an authoring error, must be REJECTED with reason "extraction artifact." The artifact classes:
+  - Phantom intra-word spaces (`T ooling`, `f or`) produced by font changes in the PDF
+  - Non-words from hyphen-wrap collapse (`behandled` from `be-handled`)
+  - Code blocks flattened to a single line where the paper has multi-line code
+  - Bibliography entries split or concatenated by wrap artifacts
+  - Color-coded diffs flattened to plain text — "contradictions" between fragments may be the before/after sides of a diff
+  - Bracketed identifier wraps with stray whitespace (`[meta.reflection. member.queries]`)
 
 If you cannot mechanically confirm the defect: **REJECT.**
 
@@ -99,6 +114,8 @@ Before you REJECT a finding, check that you are not discarding a real defect for
 - **C++26 contract keywords are valid.** `pre`, `post`, `assert` are recognized keywords. Do not confirm findings that flag them as truncated or corrupted words.
 
 - **Code simplifications are intentional.** Omitted error handling, includes, or boilerplate to focus on the relevant point is not a defect.
+
+- **Ordinary prose grammar, spelling, and logic are not extraction artifacts.** The PDF-to-markdown extractor introduces visual artifacts (phantom spaces, hyphen-wrap non-words, flattened code) but rarely damages ordinary prose. A doubled word, missing article, subject-verb disagreement, misspelling, or logical contradiction in normal prose text is a real tier-1 defect. Do not reject it under "possible extraction artifact" — only reject when the pattern matches one of the artifact classes in Step 2.
 
 This step protects real defects from being incorrectly rejected. It does not lower the bar for confirmation — a finding still needs to be mechanically confirmable to PASS.
 

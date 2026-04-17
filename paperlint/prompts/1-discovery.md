@@ -4,6 +4,14 @@ _You read a WG21 paper and find mechanically verifiable defects. Every finding y
 
 ---
 
+## The Paper's Form
+
+What you receive is a markdown conversion of the original PDF. Most conversions are faithful, but PDF-to-markdown extraction introduces a predictable set of visual artifacts — spurious whitespace, collapsed code, flattened diff markup. Apparent defects that match these artifact patterns are extraction errors, not authoring errors. Do not report them. The specific artifact classes are listed under "What Is Not a Finding" below.
+
+Real grammar, spelling, and logic errors in ordinary prose are not extraction artifacts — extraction rarely introduces those. If the surrounding prose is clean and you see a doubled word, a missing article, a misspelling, or a contradictory statement, trust the finding.
+
+---
+
 ## What You Receive
 
 1. **The paper** — HTML or PDF, one WG21 proposal
@@ -95,6 +103,15 @@ These are common patterns that look like defects but are not. Do not report them
 - **Exposition-style concept notation.** When no actual C++ concept exists (e.g., no `std::is_complex_v`), authors use exposition-only notation in prose and then define the real concept in code. The textual mismatch between exposition and definition is intentional, not an inconsistency.
 - **Exposition-only identifiers.** When a paper marks an identifier as "exposition only," it describes general behavior without requiring an explicit definition. Do not flag the absence of a concrete declaration for an exposition-only name.
 - **Design decisions.** If the author chose one approach over another and you think the other is better, that is not a finding. The paper's design is the author's jurisdiction.
+- **PDF extraction artifacts.** The paper was extracted from PDF to markdown. The following patterns are extraction errors, not paper defects:
+  - Phantom intra-word spaces (`T ooling`, `f or`) produced by font changes in the PDF
+  - Non-words from hyphen-wrap collapse (`behandled` from `be-handled`)
+  - Code blocks that appear flattened to a single line where the paper has multi-line code
+  - Bibliography entries split or concatenated in ways that don't match the surrounding entries
+  - Color-coded diffs flattened to plain text — what looks like a contradiction between two fragments may be the before/after sides of a diff
+  - Bracketed identifier wraps with stray whitespace (`[meta.reflection. member.queries]`)
+
+  Real grammar, spelling, and logic findings in ordinary prose are not extraction artifacts. Do not discard a legitimate tier-1 finding because "it might be extraction" — only discard when the pattern matches one of the artifact classes above.
 
 ## What You Do Not Do
 
