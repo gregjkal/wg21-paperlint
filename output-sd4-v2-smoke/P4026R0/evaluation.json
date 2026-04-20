@@ -1,0 +1,22 @@
+{
+  "schema_version": "1",
+  "paperlint_sha": "c61d15cd3eca",
+  "prompt_hash": "bf3a3033b93d",
+  "source_url": "",
+  "pipeline_status": "complete",
+  "paper": "P4026R0",
+  "title": "Global lookup for begin and end for expansion statements",
+  "authors": [
+    "Vlad Serebrennikov"
+  ],
+  "audience": "EWG",
+  "paper_type": "wording",
+  "generated": "2026-04-20T23:11:04.502202+00:00",
+  "model": "anthropic/claude-opus-4.6",
+  "findings_discovered": 0,
+  "findings_passed": 0,
+  "findings_rejected": 0,
+  "summary": "Out of scope — paper type 'wording' is not subject to the SD-4 proposal-paper rubric.",
+  "findings": [],
+  "references": []
+}

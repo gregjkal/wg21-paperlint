@@ -1,0 +1,30 @@
+{
+  "schema_version": "1",
+  "paperlint_sha": "22d71b73b8b9",
+  "prompt_hash": "bf3a3033b93d",
+  "source_url": "",
+  "pipeline_status": "complete",
+  "paper": "P3642R4",
+  "title": "Carry-less product: std::clmul",
+  "authors": [
+    "Jan Schultke"
+  ],
+  "audience": "LEWG",
+  "paper_type": "proposal",
+  "generated": "2026-04-20T22:14:37.191460+00:00",
+  "model": "anthropic/claude-opus-4.6",
+  "findings_discovered": 1,
+  "findings_passed": 1,
+  "findings_rejected": 0,
+  "summary": "Falls short on Q5 (no argument for fit with C++ language philosophy).",
+  "findings": [
+    {
+      "question": "Q5",
+      "title": "No argument for fit with C++ language philosophy",
+      "gap": "The paper does not argue how carry-less multiplication fits with C++'s broader design philosophy such as zero-overhead abstraction, don't pay for what you don't use, or other language-wide principles.",
+      "would_pass": "A passing treatment would include an explicit argument connecting the proposal to one or more of C++'s established design principles — e.g., that exposing hardware carry-less multiplication as a thin wrapper upholds zero-overhead abstraction, or that providing the operation in the standard library rather than requiring intrinsics supports portability and trust-the-programmer principles.",
+      "references": []
+    }
+  ],
+  "references": []
+}
