@@ -108,11 +108,12 @@ class Evidence:
 @dataclass
 class Finding:
     number: int
+    question: str  # Q1 through Q8, or U for the universal constraint
     title: str
-    category: str
-    defect: str
-    correction: str
-    axiom: str
+    requirement: str  # SD-4 source text, verbatim
+    gap: str  # what the paper does not do
+    present_summary: str  # prose description of what was found, or thorough-absence assertion
+    would_pass: str  # what a passing treatment would include
     evidence: list[Evidence] = field(default_factory=list)
 
 
@@ -231,8 +232,22 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
 
     meta_prompt = (
         "Read this WG21 paper and return ONLY a JSON object with these fields:\n\n"
-        '{"title": "...", "authors": ["..."], "audience": "...", '
-        '"paper_type": "wording or proposal or directional or white-paper or informational"}\n\n'
+        '{"title": "...", "authors": ["..."], "audience": "...", "paper_type": "..."}\n\n'
+        "paper_type must be exactly one of the following, chosen by what the paper primarily does:\n\n"
+        "- \"proposal\": proposes a design addition or change — a new feature, API, function, "
+        "class, concept, or language capability. Papers that introduce new `std::` entities "
+        "(functions, types, concepts), new syntax, or new semantics are proposals, even when "
+        "they include standardese wording. If the paper's purpose is to add something new to "
+        "C++, it is a proposal.\n"
+        "- \"wording\": clarifies or corrects existing standardese without adding new design "
+        "content. Editorial fixes, defect reports (DRs), or specification clarifications for "
+        "features that already exist in the standard.\n"
+        "- \"directional\": sets direction or priorities for WG21 without proposing a specific "
+        "feature (e.g., committee strategy, priority lists, roadmap papers).\n"
+        "- \"white-paper\": exploratory analysis on a topic not yet in proposal form.\n"
+        "- \"informational\": reports, analyses, or content that does not propose changes.\n\n"
+        "When in doubt between proposal and wording, pick proposal if the paper adds new "
+        "entities or capabilities, and wording only if it strictly corrects existing text.\n\n"
         "Return ONLY the JSON."
     )
 
@@ -281,7 +296,7 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
 
 
 def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> list[Finding]:
-    """Step 1: Discovery — find defects, output structured JSON with evidence."""
+    """Step 1: Discovery — find SD-4 shortfalls, output structured JSON with evidence."""
     print("\n--- Step 1: Discovery (JSON mode + thinking) ---")
 
     rubric_text = RUBRIC_PATH.read_text(encoding="utf-8")
@@ -293,11 +308,12 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
         '{"findings": [\n'
         '  {\n'
         '    "number": 1,\n'
-        '    "title": "short title",\n'
-        '    "category": "rubric code e.g. 1.2",\n'
-        '    "defect": "what is wrong — one sentence",\n'
-        '    "correction": "what it should say — one sentence",\n'
-        '    "axiom": "ground truth source",\n'
+        '    "question": "Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | U",\n'
+        '    "title": "short description",\n'
+        '    "requirement": "SD-4 source text quoted verbatim from rubric.md",\n'
+        '    "gap": "what the paper does not do — one sentence",\n'
+        '    "present_summary": "prose description of what was found related to this question, or \\"no treatment found after thorough search\\" when pure absence",\n'
+        '    "would_pass": "what a passing treatment would include — one sentence",\n'
         '    "evidence": [\n'
         '      {"location": "§X.Y or section name", "quote": "exact text from the paper"}\n'
         '    ]\n'
@@ -306,6 +322,8 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
         "Each evidence quote must be EXACT text from the paper — copy precisely, "
         "character for character. Do not paraphrase. Do not combine multiple passages "
         "into one quote. Use separate evidence entries for each passage.\n\n"
+        "Most SD-4 findings will be pure absence — the paper does not address the question at all. "
+        "These findings have an empty evidence array.\n\n"
         "If no findings, return {\"findings\": []}.\n"
         "Return ONLY the JSON."
     )
@@ -365,17 +383,18 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
         ]
         findings.append(Finding(
             number=rf.get("number", 0),
+            question=rf.get("question", ""),
             title=rf.get("title", ""),
-            category=rf.get("category", ""),
-            defect=rf.get("defect", ""),
-            correction=rf.get("correction", ""),
-            axiom=rf.get("axiom", ""),
+            requirement=rf.get("requirement", ""),
+            gap=rf.get("gap", ""),
+            present_summary=rf.get("present_summary", ""),
+            would_pass=rf.get("would_pass", ""),
             evidence=evidence,
         ))
 
     print(f"  Findings: {len(findings)}")
     for f in findings:
-        print(f"    #{f.number}: {f.title[:60]} ({len(f.evidence)} evidence)")
+        print(f"    #{f.number} [{f.question}]: {f.title[:60]} ({len(f.evidence)} evidence)")
 
     return findings
 
@@ -426,7 +445,13 @@ def step_verify_quotes(findings: list[Finding], source_text: str) -> list[Findin
                 all_verified = False
             print(f"    #{f.number} [{status}] \"{ev.quote[:60]}\"")
 
-        if f.evidence and all(ev.verified for ev in f.evidence):
+        # Keep findings with no evidence (pure absence under SD-4 rubric) or with
+        # all evidence verified. Drop only when the finding cites evidence that
+        # does not match the paper.
+        if not f.evidence:
+            verified_findings.append(f)
+            print(f"    #{f.number} [ABSENCE] no evidence cited (pure absence finding)")
+        elif all(ev.verified for ev in f.evidence):
             verified_findings.append(f)
         else:
             unverified = sum(1 for ev in f.evidence if not ev.verified)
@@ -444,36 +469,17 @@ def _format_findings_for_gate(findings: list[Finding]) -> str:
     lines = ["# Candidate Findings for Verification\n"]
     for f in findings:
         lines.append(f"## Finding #{f.number}: {f.title}")
-        lines.append(f"- **Category:** {f.category}")
-        for ev in f.evidence:
-            lines.append(f"- **Location:** {ev.location}")
-            lines.append(f'- **Quoted text:** "{ev.quote}"')
-        lines.append(f"- **Defect:** {f.defect}")
-        lines.append(f"- **Correction:** {f.correction}")
-        lines.append(f"- **Axiom:** {f.axiom}")
-        lines.append("")
-    return "\n".join(lines)
-
-
-def _format_findings_for_eval(meta: PaperMeta, passed: list[GatedFinding]) -> str:
-    lines = [
-        "# Paper Metadata\n",
-        f"- **Paper:** {meta.paper}",
-        f"- **Title:** {meta.title}",
-        f"- **Authors:** {', '.join(meta.authors)}",
-        f"- **Target group:** {meta.target_group}",
-        "",
-        f"# Gated Findings ({len(passed)} items)\n",
-    ]
-    for g in passed:
-        f = g.finding
-        lines.append(f"## Finding #{f.number}: {f.title}")
-        lines.append(f"- **Category:** {f.category}")
-        for ev in f.evidence:
-            lines.append(f"- **Location:** {ev.location}")
-            lines.append(f'- **Quoted text:** "{ev.quote}"')
-        lines.append(f"- **Defect:** {f.defect}")
-        lines.append(f"- **Correction:** {f.correction}")
+        lines.append(f"- **Question:** {f.question}")
+        lines.append(f"- **Requirement (SD-4):** {f.requirement}")
+        lines.append(f"- **Gap:** {f.gap}")
+        lines.append(f"- **Present (summary):** {f.present_summary}")
+        if f.evidence:
+            for ev in f.evidence:
+                lines.append(f"- **Evidence location:** {ev.location}")
+                lines.append(f'- **Evidence quote:** "{ev.quote}"')
+        else:
+            lines.append("- **Evidence:** (none — pure absence finding)")
+        lines.append(f"- **Would pass:** {f.would_pass}")
         lines.append("")
     return "\n".join(lines)
 
@@ -501,10 +507,11 @@ def step_gate(client: openai.OpenAI, paper_text: str,
         "\n\n## Output Format\n\n"
         "Return ONLY a JSON object:\n"
         '{"verdicts": [\n'
-        '  {"finding_number": 1, "verdict": "PASS", "reason": "...", "judgment": false}\n'
+        '  {"finding_number": 1, "question": "Q1", "verdict": "PASS", "reason": "...", "judgment": false}\n'
         ']}\n'
+        "Each verdict carries the finding_number and question (Q1-Q8 or U) for traceability.\n"
         "verdict must be PASS, REJECT, or REFER.\n"
-        "judgment: true if reaching this verdict required judgment beyond mechanical verification, false if purely mechanical.\n"
+        "judgment: true if reaching this verdict required judgment beyond the rubric's pass criteria, false if the rubric's criteria applied directly.\n"
         "Return ONLY the JSON."
     )
 
@@ -578,12 +585,12 @@ def step_gate(client: openai.OpenAI, paper_text: str,
 
 
 def step_summary_writer(client: openai.OpenAI, meta: PaperMeta,
-                        n_findings: int) -> str:
-    """Step 3: Write the evaluation summary. Findings pass through from Discovery untouched."""
+                        passed: list[GatedFinding]) -> str:
+    """Step 3: Write the evaluation summary characterizing SD-4 findings."""
     print("\n--- Step 3: Summary ---")
 
-    if n_findings == 0:
-        summary = f"No objective problems found in {meta.paper} — {meta.title}."
+    if not passed:
+        summary = "No SD-4 shortfalls found."
         print(f"  Clean paper: {summary}")
         return summary
 
@@ -592,20 +599,23 @@ def step_summary_writer(client: openai.OpenAI, meta: PaperMeta,
     json_instruction = (
         "\n\n## Output Format\n\n"
         "Return ONLY a JSON object:\n"
-        '{"summary": "1-2 sentence characterization of what the evaluation found. Plain text."}\n\n'
+        '{"summary": "1-2 sentence characterization of the findings. Plain text."}\n\n'
         "Write ONLY the summary. Findings are assembled separately.\n"
         "Return ONLY the JSON."
     )
 
+    findings_list = "\n".join(
+        f"- {g.finding.question}: {g.finding.title}" for g in passed
+    )
+
     user_content = (
         f"Paper: {meta.paper} — {meta.title}\n"
-        f"Authors: {', '.join(meta.authors)}\n"
-        f"Audience: {meta.target_group}\n"
-        f"Type: {meta.paper_type}\n\n"
-        f"Number of findings that passed verification: {n_findings}\n\n"
-        f"Summarize what the evaluation found. Characterize the findings "
-        f"at the level of categories and sections — do not list each one. "
-        f"Do not describe what the paper proposes; the reader already knows."
+        f"Audience: {meta.target_group}\n\n"
+        f"Findings that passed the gate ({len(passed)}):\n"
+        f"{findings_list}\n\n"
+        f"Write the summary as instructed — compact, naming questions by number "
+        f"with a short parenthetical gloss. Do not list every finding if there "
+        f"are many; characterize at the pillar level for three or more."
     )
 
     response = _call_with_retry(
@@ -791,6 +801,21 @@ def run_paper_eval(
     paper_md_path = paper_output_dir / "paper.md"
     paper_md_path.write_text(clean_text, encoding="utf-8")
 
+    # SD-4 scope gate: only proposal papers are subject to this rubric.
+    # Other paper types (wording, directional, white-paper, informational) short-circuit
+    # with an empty findings list and an out-of-scope summary.
+    if meta.paper_type != "proposal":
+        print(f"  OUT OF SCOPE: paper_type={meta.paper_type!r} — SD-4 rubric applies to proposal papers only")
+        eval_json = _base_eval_json(source_url, paper_id, mailing_meta)
+        eval_json["pipeline_status"] = "complete"
+        eval_json["title"] = meta.title
+        eval_json["authors"] = meta.authors
+        eval_json["audience"] = meta.target_group
+        eval_json["paper_type"] = meta.paper_type
+        eval_json["summary"] = f"Out of scope — paper type {meta.paper_type!r} is not subject to the SD-4 proposal-paper rubric."
+        _write_eval_json(eval_json, output_dir, paper_id)
+        return eval_json
+
     # Step 1: Discovery → Quote verification → Gate
     try:
         findings = step_discovery(client, clean_text, meta)
@@ -823,8 +848,13 @@ def run_paper_eval(
         _write_eval_json(eval_json, output_dir, paper_id)
         return eval_json
 
-    # Step 2b: Known-FP suppression (post-gate filter)
-    gated, suppressed = step_suppress_known_fps(gated, meta)
+    # Step 2b: Known-FP suppression
+    # v1's suppression targets extraction-artifact defects (intra-word spacing, TOC
+    # layout, bracketed identifier wrap). These are orthogonal to SD-4 gap findings,
+    # which are about content quality, not text rendering. Suppression is skipped
+    # under the SD-4 rubric; if we later need extraction-artifact handling, it
+    # should happen in the extractor layer, not post-gate.
+    suppressed: list = []
     suppressed_path = paper_output_dir / "2c-suppressed.json"
     suppressed_path.write_text(
         json.dumps(suppressed, indent=2, ensure_ascii=False),
@@ -832,7 +862,7 @@ def run_paper_eval(
 
     # Step 3: Summary
     passed = [g for g in gated if g.verdict == "PASS"]
-    summary = step_summary_writer(client, meta, len(passed))
+    summary = step_summary_writer(client, meta, passed)
 
     # Step 4: Assembly
     references = []
@@ -857,10 +887,10 @@ def run_paper_eval(
                 finding_refs.append(ref_counter)
                 ref_counter += 1
         output_findings.append({
-            "location": f.evidence[0].location if f.evidence else "",
-            "description": f.defect,
-            "category": f.category,
-            "correction": f.correction,
+            "question": f.question,
+            "title": f.title,
+            "gap": f.gap,
+            "would_pass": f.would_pass,
             "references": finding_refs,
         })
 

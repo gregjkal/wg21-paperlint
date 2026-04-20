@@ -34,7 +34,7 @@ The operating principle is that a false positive costs more than a missed shortf
 
 You receive:
 
-1. The discovery output: a `references` collection and an array of candidate findings. Each finding has a question ID, SD-4 requirement text, `gap`, `present_summary`, optional `references` IDs into the references collection, and `would_pass`.
+1. The candidate findings from discovery. Each finding has a question ID, SD-4 requirement text, `gap`, `present_summary`, an `evidence` array of `{location, quote}` pairs (possibly empty for absence findings), and `would_pass`.
 2. The full text of the paper
 
 ### Step 1: Read the paper
@@ -52,7 +52,7 @@ Re-read the paper looking specifically for content that addresses the question. 
 - Treatment that uses non-standard terminology but means the same thing
 - Treatment in revision history, appendix, or footnote
 
-If thorough search confirms the `present` field is accurate — the paper has no treatment, or only the weak treatment cited — and the treatment genuinely does not meet the requirement, the shortfall is confirmed.
+If thorough search confirms the `present_summary` and cited `evidence` are accurate — the paper has no treatment, or only the weak treatment cited — and the treatment genuinely does not meet the requirement, the shortfall is confirmed.
 
 A shortfall is NOT confirmable when:
 
@@ -88,9 +88,9 @@ If you cannot confirm the shortfall: **REJECT.**
 
 Reject if any of these fail:
 
-1. **A cited reference is wrong.** For each reference ID the finding cites, verify the corresponding `text` in the `references` collection appears at the stated `location` in the paper. If wrong location or misquoted text, REJECT.
-2. **The `present_summary` misrepresents the paper.** If the prose contradicts the cited references, or asserts thorough absence without evidence of search, REJECT.
-3. **A cited reference does not support the gap.** If the finding lists reference IDs but the cited content does not bear on the question's gap, REJECT.
+1. **An evidence quote is wrong.** For each evidence entry, verify the `quote` appears at the stated `location` in the paper. If wrong location or misquoted text, REJECT.
+2. **The `present_summary` misrepresents the paper.** If the prose contradicts the cited evidence, or asserts thorough absence without evidence of search, REJECT.
+3. **A cited evidence quote does not support the gap.** If the finding attaches evidence but the quoted content does not bear on the question's gap, REJECT.
 4. **The `gap` does not match the SD-4 requirement cited.** If the gap description is about a different question than the `requirement` field, REJECT.
 5. **The `would_pass` standard is stricter than the rubric.** If the passing treatment described would require more than the rubric's pass criteria, the bar has been raised above SD-4. REJECT.
 
@@ -111,7 +111,7 @@ This step protects real shortfalls from being REJECTed for the wrong reason. It 
 
 For each candidate finding, return one of:
 
-- **PASS** — You confirmed, by reading the paper in full, that the SD-4 requirement is unmet. The `present` field accurately describes the paper, the `gap` matches the requirement, and the `would_pass` standard aligns with the rubric.
+- **PASS** — You confirmed, by reading the paper in full, that the SD-4 requirement is unmet. The `present_summary` and any cited evidence accurately describe the paper, the `gap` matches the requirement, and the `would_pass` standard aligns with the rubric.
 - **REJECT** — You cannot confirm the shortfall, or you found the paper meets the requirement in a form the discovery agent missed, or one of Steps 2–3 failed. State the reason in one sentence.
 - **REFER** — You found evidence both for and against. The finding requires human review. State what you found and what remains uncertain.
 
