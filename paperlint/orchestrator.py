@@ -56,6 +56,20 @@ MAX_TOKENS = {
 PROMPTS_DIR = _PKG_ROOT / "prompts"
 RUBRIC_PATH = _PKG_ROOT / "rubric.md"
 
+# Rubric questions currently in scope. Each entry has an id and the literal question text.
+# Questions are added one at a time as each is calibrated.
+QUESTIONS_IN_SCOPE: list[dict] = [
+    {
+        "id": "Q1",
+        "question": "Does the paper show code of the feature it is proposing?",
+    },
+]
+
+# Base URL for the extracted paper.md files on GitHub. Used to build click-through
+# links from each review.md back to the source markdown the LLM read.
+# Update when the branch is renamed or the output directory changes.
+PAPER_MD_BASE_URL = "https://github.com/cppalliance/paperlint/blob/feature/sd4-rubric-v2/output-sd4-v4"
+
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 10
 
@@ -107,13 +121,10 @@ class Evidence:
 
 @dataclass
 class Finding:
-    number: int
-    question: str  # Q1 through Q8, or U for the universal constraint
-    title: str
-    requirement: str  # SD-4 source text, verbatim
-    gap: str  # what the paper does not do
-    present_summary: str  # prose description of what was found, or thorough-absence assertion
-    would_pass: str  # what a passing treatment would include
+    """A rubric-question result for a paper: applicability + (if applicable) answered + evidence."""
+    question: str  # e.g. "Q1"
+    applicable: bool = True
+    answered: bool = False  # meaningful only when applicable
     evidence: list[Evidence] = field(default_factory=list)
 
 
@@ -296,35 +307,30 @@ def step_metadata(paper_path: Path, client: openai.OpenAI) -> tuple[str, PaperMe
 
 
 def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> list[Finding]:
-    """Step 1: Discovery — find SD-4 shortfalls, output structured JSON with evidence."""
+    """Step 1: Discovery — for each in-scope question, return applicability + (if applicable) answered + evidence."""
     print("\n--- Step 1: Discovery (JSON mode + thinking) ---")
 
     rubric_text = RUBRIC_PATH.read_text(encoding="utf-8")
     skill_text = (PROMPTS_DIR / "1-discovery.md").read_text(encoding="utf-8")
 
+    question_ids = ", ".join(q["id"] for q in QUESTIONS_IN_SCOPE)
+
     json_schema = (
         "\n\n## Output Format\n\n"
-        "Return ONLY a JSON object with this structure:\n"
-        '{"findings": [\n'
-        '  {\n'
-        '    "number": 1,\n'
-        '    "question": "Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | U",\n'
-        '    "title": "short description",\n'
-        '    "requirement": "SD-4 source text quoted verbatim from rubric.md",\n'
-        '    "gap": "what the paper does not do — one sentence",\n'
-        '    "present_summary": "prose description of what was found related to this question, or \\"no treatment found after thorough search\\" when pure absence",\n'
-        '    "would_pass": "what a passing treatment would include — one sentence",\n'
-        '    "evidence": [\n'
-        '      {"location": "§X.Y or section name", "quote": "exact text from the paper"}\n'
-        '    ]\n'
-        '  }\n'
-        ']}\n\n'
-        "Each evidence quote must be EXACT text from the paper — copy precisely, "
-        "character for character. Do not paraphrase. Do not combine multiple passages "
-        "into one quote. Use separate evidence entries for each passage.\n\n"
-        "Most SD-4 findings will be pure absence — the paper does not address the question at all. "
-        "These findings have an empty evidence array.\n\n"
-        "If no findings, return {\"findings\": []}.\n"
+        "Return ONLY a JSON object with this structure. For each in-scope question "
+        f"({question_ids}), return one result with one of three shapes:\n\n"
+        "Not applicable:\n"
+        '  {"question": "Q1", "applicable": false}\n\n'
+        "Applicable but not answered:\n"
+        '  {"question": "Q1", "applicable": true, "answered": false}\n\n'
+        "Applicable and answered:\n"
+        '  {"question": "Q1", "applicable": true, "answered": true,\n'
+        '   "evidence": [{"location": "§X.Y or section name", "quote": "exact text from the paper"}]}\n\n'
+        "Wrap the results in an object:\n"
+        '  {"results": [ ... ]}\n\n'
+        "Pick ONE evidence entry per answered question — the single strongest passage. "
+        "The quote must be EXACT text from the paper, copied character for character. "
+        "Keep it minimal — a handful of lines. Do not include multiple evidence entries.\n\n"
         "Return ONLY the JSON."
     )
 
@@ -336,7 +342,7 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
         f"authors=\"{', '.join(meta.authors)}\">\n"
         f"{clean_text}\n"
         f"</paper>\n\n"
-        f"Analyze this paper for objective defects per the rubric.\n\n"
+        f"Evaluate each in-scope question against this paper per the rubric.\n\n"
         f"IMPORTANT: Return ONLY a valid JSON object. No markdown. No explanation."
     )
 
@@ -373,28 +379,30 @@ def step_discovery(client: openai.OpenAI, clean_text: str, meta: PaperMeta) -> l
             else:
                 raise
 
-    raw_findings = parsed.get("findings", [])
+    raw_results = parsed.get("results", [])
 
     findings: list[Finding] = []
-    for rf in raw_findings:
+    for rr in raw_results:
         evidence = [
             Evidence(location=e.get("location", ""), quote=e.get("quote", ""))
-            for e in rf.get("evidence", [])
+            for e in rr.get("evidence", [])
         ]
         findings.append(Finding(
-            number=rf.get("number", 0),
-            question=rf.get("question", ""),
-            title=rf.get("title", ""),
-            requirement=rf.get("requirement", ""),
-            gap=rf.get("gap", ""),
-            present_summary=rf.get("present_summary", ""),
-            would_pass=rf.get("would_pass", ""),
+            question=rr.get("question", ""),
+            applicable=bool(rr.get("applicable", True)),
+            answered=bool(rr.get("answered", False)),
             evidence=evidence,
         ))
 
-    print(f"  Findings: {len(findings)}")
+    print(f"  Results: {len(findings)}")
     for f in findings:
-        print(f"    #{f.number} [{f.question}]: {f.title[:60]} ({len(f.evidence)} evidence)")
+        if not f.applicable:
+            state = "NOT APPLICABLE"
+        elif f.answered:
+            state = f"ANSWERED ({len(f.evidence)} evidence)"
+        else:
+            state = "APPLICABLE BUT NOT ANSWERED"
+        print(f"    [{f.question}] {state}")
 
     return findings
 
@@ -443,19 +451,22 @@ def step_verify_quotes(findings: list[Finding], source_text: str) -> list[Findin
                     status = "MISS"
             if not ev.verified:
                 all_verified = False
-            print(f"    #{f.number} [{status}] \"{ev.quote[:60]}\"")
+            print(f"    [{f.question}] [{status}] \"{ev.quote[:60]}\"")
 
-        # Keep findings with no evidence (pure absence under SD-4 rubric) or with
-        # all evidence verified. Drop only when the finding cites evidence that
-        # does not match the paper.
+        # Keep findings with no evidence (not-applicable or applicable-not-answered)
+        # or with all evidence verified. Downgrade findings whose cited evidence does
+        # not match the paper: the applicability stands, but answered flips to false
+        # and evidence is cleared.
         if not f.evidence:
             verified_findings.append(f)
-            print(f"    #{f.number} [ABSENCE] no evidence cited (pure absence finding)")
         elif all(ev.verified for ev in f.evidence):
             verified_findings.append(f)
         else:
             unverified = sum(1 for ev in f.evidence if not ev.verified)
-            print(f"    #{f.number} DROPPED — {unverified} unverifiable quote(s)")
+            print(f"    [{f.question}] DOWNGRADED — {unverified} unverifiable quote(s); answered→false")
+            f.answered = False
+            f.evidence = []
+            verified_findings.append(f)
 
     dropped = len(findings) - len(verified_findings)
     if dropped:
@@ -466,20 +477,19 @@ def step_verify_quotes(findings: list[Finding], source_text: str) -> list[Findin
 
 
 def _format_findings_for_gate(findings: list[Finding]) -> str:
-    lines = ["# Candidate Findings for Verification\n"]
+    """Format discovery results as markdown for the gate to verify."""
+    lines = ["# Discovery Results for Verification\n"]
     for f in findings:
-        lines.append(f"## Finding #{f.number}: {f.title}")
-        lines.append(f"- **Question:** {f.question}")
-        lines.append(f"- **Requirement (SD-4):** {f.requirement}")
-        lines.append(f"- **Gap:** {f.gap}")
-        lines.append(f"- **Present (summary):** {f.present_summary}")
-        if f.evidence:
+        lines.append(f"## {f.question}")
+        if not f.applicable:
+            lines.append("- **State:** not applicable")
+        elif not f.answered:
+            lines.append("- **State:** applicable but not answered")
+        else:
+            lines.append("- **State:** applicable and answered")
             for ev in f.evidence:
                 lines.append(f"- **Evidence location:** {ev.location}")
                 lines.append(f'- **Evidence quote:** "{ev.quote}"')
-        else:
-            lines.append("- **Evidence:** (none — pure absence finding)")
-        lines.append(f"- **Would pass:** {f.would_pass}")
         lines.append("")
     return "\n".join(lines)
 
@@ -505,13 +515,14 @@ def step_gate(client: openai.OpenAI, paper_text: str,
 
     json_instruction = (
         "\n\n## Output Format\n\n"
-        "Return ONLY a JSON object:\n"
+        "Return ONLY a JSON object with one verdict per discovery result:\n"
         '{"verdicts": [\n'
-        '  {"finding_number": 1, "question": "Q1", "verdict": "PASS", "reason": "...", "judgment": false}\n'
-        ']}\n'
-        "Each verdict carries the finding_number and question (Q1-Q8 or U) for traceability.\n"
+        '  {"question": "Q1", "verdict": "PASS", "reason": "...", "judgment": false}\n'
+        ']}\n\n'
+        "Each verdict is keyed by the question ID.\n"
         "verdict must be PASS, REJECT, or REFER.\n"
-        "judgment: true if reaching this verdict required judgment beyond the rubric's pass criteria, false if the rubric's criteria applied directly.\n"
+        "judgment: true if reaching this verdict required judgment beyond the rubric's "
+        "applicability and evidence rules; false if those rules applied directly.\n"
         "Return ONLY the JSON."
     )
 
@@ -555,10 +566,10 @@ def step_gate(client: openai.OpenAI, paper_text: str,
     verdicts = parsed.get("verdicts", [])
 
     gated: list[GatedFinding] = []
-    verdict_map = {v["finding_number"]: v for v in verdicts}
+    verdict_map = {v.get("question", ""): v for v in verdicts}
     judgment_rejections = 0
     for f in findings:
-        v = verdict_map.get(f.number, {"verdict": "REFER", "reason": "No verdict returned"})
+        v = verdict_map.get(f.question, {"verdict": "REFER", "reason": "No verdict returned"})
         verdict = v.get("verdict", "REFER").upper()
         reason = v.get("reason", "")
         used_judgment = v.get("judgment", False)
@@ -579,65 +590,16 @@ def step_gate(client: openai.OpenAI, paper_text: str,
     if judgment_rejections:
         print(f"  ({judgment_rejections} auto-rejected: PASS with judgment)")
     for g in gated:
-        print(f"    #{g.finding.number}: {g.verdict} — {g.reason[:80]}")
+        print(f"    [{g.finding.question}] {g.verdict} — {g.reason[:80]}")
 
     return gated
 
 
-def step_summary_writer(client: openai.OpenAI, meta: PaperMeta,
-                        passed: list[GatedFinding]) -> str:
-    """Step 3: Write the evaluation summary characterizing SD-4 findings."""
-    print("\n--- Step 3: Summary ---")
-
-    if not passed:
-        summary = "No SD-4 shortfalls found."
-        print(f"  Clean paper: {summary}")
-        return summary
-
-    system_prompt = (PROMPTS_DIR / "3-evaluation-writer.md").read_text(encoding="utf-8")
-
-    json_instruction = (
-        "\n\n## Output Format\n\n"
-        "Return ONLY a JSON object:\n"
-        '{"summary": "1-2 sentence characterization of the findings. Plain text."}\n\n'
-        "Write ONLY the summary. Findings are assembled separately.\n"
-        "Return ONLY the JSON."
-    )
-
-    findings_list = "\n".join(
-        f"- {g.finding.question}: {g.finding.title}" for g in passed
-    )
-
-    user_content = (
-        f"Paper: {meta.paper} — {meta.title}\n"
-        f"Audience: {meta.target_group}\n\n"
-        f"Findings that passed the gate ({len(passed)}):\n"
-        f"{findings_list}\n\n"
-        f"Write the summary as instructed — compact, naming questions by number "
-        f"with a short parenthetical gloss. Do not list every finding if there "
-        f"are many; characterize at the pillar level for three or more."
-    )
-
-    response = _call_with_retry(
-        client, "Summary",
-        model=OPENROUTER_SONNET,
-        max_tokens=512,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt + json_instruction},
-            {"role": "user", "content": user_content},
-        ],
-    )
-
-    raw = _extract_text(response)
-    try:
-        parsed = json.loads(_strip_fences(raw))
-        summary = parsed.get("summary", f"Evaluation of {meta.paper}.")
-    except json.JSONDecodeError:
-        summary = f"Evaluation of {meta.paper} — {meta.title}."
-
-    print(f"  Summary: {summary[:100]}...")
-    return summary
+def compute_summary(applicable_count: int, answered_count: int) -> str:
+    """Deterministic score-based summary. No LLM needed."""
+    if applicable_count == 0:
+        return "It looks like no questions apply to this paper."
+    return f"Answered {answered_count} of {applicable_count} applicable questions."
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +677,68 @@ def _write_eval_json(eval_json: dict, output_dir: Path, paper_id: str) -> None:
     json_path.write_text(json.dumps(eval_json, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_review_md(eval_json: dict, output_dir: Path, paper_id: str) -> None:
+    """Write a human-readable review.md alongside evaluation.json, per the Vinnie-approved template."""
+    paper_output_dir = output_dir / paper_id
+    paper_output_dir.mkdir(parents=True, exist_ok=True)
+
+    refs_by_number = {r["number"]: r for r in eval_json.get("references", [])}
+    title = eval_json.get("title", "")
+    paper = eval_json.get("paper", paper_id)
+    summary = eval_json.get("summary", "")
+    applicable_answered = eval_json.get("applicable_answered", [])
+    applicable_unanswered = eval_json.get("applicable_unanswered", [])
+    not_applicable = eval_json.get("not_applicable", [])
+
+    paper_link = f"{PAPER_MD_BASE_URL}/{paper}/paper.md"
+    lines: list[str] = [
+        f"# [{paper}]({paper_link}) - {title}",
+        summary,
+        "",
+    ]
+
+    # Applicable questions (answered first, then not answered), in the order of QUESTIONS_IN_SCOPE
+    applicable_by_qid = {}
+    for a in applicable_answered:
+        applicable_by_qid[a["question"]] = ("answered", a)
+    for a in applicable_unanswered:
+        applicable_by_qid[a["question"]] = ("unanswered", a)
+
+    for q in QUESTIONS_IN_SCOPE:
+        state = applicable_by_qid.get(q["id"])
+        if not state:
+            continue
+        status, entry = state
+        lines.append(f"**{q['id']}. {q['question']}**")
+        if status == "answered":
+            for rn in entry.get("references", []):
+                ref = refs_by_number.get(rn)
+                if not ref:
+                    continue
+                quote = ref.get("quote", "").strip()
+                if quote:
+                    quoted = "\n".join(f"> {ln}" for ln in quote.splitlines())
+                    lines.append(quoted)
+        lines.append("")
+
+    if not_applicable:
+        # Only emit the "It looks like these questions don't apply" header when there
+        # are applicable questions above it; otherwise the top-level summary already
+        # says everything and the bullet list suffices.
+        if applicable_answered or applicable_unanswered:
+            lines.append("It looks like these questions don't apply to this paper:")
+        for entry in not_applicable:
+            qid = entry["question"]
+            qtext = entry.get("question_text") or next(
+                (q["question"] for q in QUESTIONS_IN_SCOPE if q["id"] == qid), ""
+            )
+            lines.append(f"- **{qid}. {qtext}**")
+        lines.append("")
+
+    md_path = paper_output_dir / "review.md"
+    md_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
 def _base_eval_json(source_url: str, paper_id: str, mailing_meta: dict | None) -> dict:
     """Build the skeleton eval JSON with whatever metadata is available."""
     if mailing_meta:
@@ -739,11 +763,12 @@ def _base_eval_json(source_url: str, paper_id: str, mailing_meta: dict | None) -
         "paper_type": "",
         "generated": datetime.now(timezone.utc).isoformat(),
         "model": OPENROUTER_MODEL,
-        "findings_discovered": 0,
-        "findings_passed": 0,
-        "findings_rejected": 0,
+        "applicable_count": 0,
+        "answered_count": 0,
         "summary": "",
-        "findings": [],
+        "applicable_answered": [],
+        "applicable_unanswered": [],
+        "not_applicable": [],
         "references": [],
     }
 
@@ -801,20 +826,9 @@ def run_paper_eval(
     paper_md_path = paper_output_dir / "paper.md"
     paper_md_path.write_text(clean_text, encoding="utf-8")
 
-    # SD-4 scope gate: only proposal papers are subject to this rubric.
-    # Other paper types (wording, directional, white-paper, informational) short-circuit
-    # with an empty findings list and an out-of-scope summary.
-    if meta.paper_type != "proposal":
-        print(f"  OUT OF SCOPE: paper_type={meta.paper_type!r} — SD-4 rubric applies to proposal papers only")
-        eval_json = _base_eval_json(source_url, paper_id, mailing_meta)
-        eval_json["pipeline_status"] = "complete"
-        eval_json["title"] = meta.title
-        eval_json["authors"] = meta.authors
-        eval_json["audience"] = meta.target_group
-        eval_json["paper_type"] = meta.paper_type
-        eval_json["summary"] = f"Out of scope — paper type {meta.paper_type!r} is not subject to the SD-4 proposal-paper rubric."
-        _write_eval_json(eval_json, output_dir, paper_id)
-        return eval_json
+    # No scope gate under the positive-verification model. Every paper runs through
+    # discovery; non-proposal papers will simply not earn any points, which is the
+    # intended baseline outcome, not a defect.
 
     # Step 1: Discovery → Quote verification → Gate
     try:
@@ -833,7 +847,7 @@ def run_paper_eval(
 
         gate_path = paper_output_dir / "2-gate.json"
         gate_path.write_text(json.dumps(
-            [{"finding_number": g.finding.number, "verdict": g.verdict, "reason": g.reason}
+            [{"question": g.finding.question, "verdict": g.verdict, "reason": g.reason}
              for g in gated], indent=2), encoding="utf-8")
 
     except Exception as e:
@@ -860,39 +874,64 @@ def run_paper_eval(
         json.dumps(suppressed, indent=2, ensure_ascii=False),
         encoding="utf-8")
 
-    # Step 3: Summary
-    passed = [g for g in gated if g.verdict == "PASS"]
-    summary = step_summary_writer(client, meta, passed)
-
-    # Step 4: Assembly
-    references = []
-    ref_counter = 1
-    output_findings = []
-
-    for gf in passed:
+    # Step 3: Assembly — bucket each gated result into applicable/answered/not-applicable
+    # Only PASS verdicts count; REJECT or REFER collapses the question back to the safe
+    # default (applicable with no answer).
+    question_state: dict[str, dict] = {}
+    for gf in gated:
         f = gf.finding
-        finding_refs = []
-        for ev in f.evidence:
-            if ev.verified:
-                ref = {
-                    "number": ref_counter,
-                    "location": ev.location,
-                    "quote": ev.quote,
-                    "verified": True,
-                }
-                if ev.extracted_char_start is not None:
-                    ref["extracted_char_start"] = ev.extracted_char_start
-                    ref["extracted_char_end"] = ev.extracted_char_end
-                references.append(ref)
-                finding_refs.append(ref_counter)
-                ref_counter += 1
-        output_findings.append({
-            "question": f.question,
-            "title": f.title,
-            "gap": f.gap,
-            "would_pass": f.would_pass,
-            "references": finding_refs,
-        })
+        if gf.verdict != "PASS":
+            question_state[f.question] = {"applicable": True, "answered": False, "evidence": []}
+            continue
+        question_state[f.question] = {
+            "applicable": f.applicable,
+            "answered": f.applicable and f.answered,
+            "evidence": f.evidence if (f.applicable and f.answered) else [],
+        }
+
+    # Fill in any in-scope questions the gate skipped (treat as applicable, not answered).
+    for q in QUESTIONS_IN_SCOPE:
+        question_state.setdefault(q["id"], {"applicable": True, "answered": False, "evidence": []})
+
+    references: list[dict] = []
+    ref_counter = 1
+    applicable_answered: list[dict] = []
+    applicable_unanswered: list[dict] = []
+    not_applicable: list[dict] = []
+
+    for q in QUESTIONS_IN_SCOPE:
+        state = question_state[q["id"]]
+        entry = {"question": q["id"], "question_text": q["question"]}
+        if not state["applicable"]:
+            not_applicable.append(entry)
+            continue
+        if not state["answered"]:
+            applicable_unanswered.append(entry)
+            continue
+        # Applicable and answered: collect references
+        finding_refs: list[int] = []
+        for ev in state["evidence"]:
+            if not ev.verified:
+                continue
+            ref = {
+                "number": ref_counter,
+                "location": ev.location,
+                "quote": ev.quote,
+                "verified": True,
+            }
+            if ev.extracted_char_start is not None:
+                ref["extracted_char_start"] = ev.extracted_char_start
+                ref["extracted_char_end"] = ev.extracted_char_end
+            references.append(ref)
+            finding_refs.append(ref_counter)
+            ref_counter += 1
+        entry["references"] = finding_refs
+        applicable_answered.append(entry)
+
+    applicable_count = len(applicable_answered) + len(applicable_unanswered)
+    answered_count = len(applicable_answered)
+    summary = compute_summary(applicable_count, answered_count)
+    print(f"\n--- Summary ---\n  {summary}")
 
     eval_json = {
         "schema_version": SCHEMA_VERSION,
@@ -907,18 +946,20 @@ def run_paper_eval(
         "paper_type": meta.paper_type,
         "generated": meta.run_timestamp,
         "model": meta.model,
-        "findings_discovered": raw_discovered,
-        "findings_passed": len(passed),
-        "findings_rejected": len([g for g in gated if g.verdict == "REJECT"]),
+        "applicable_count": applicable_count,
+        "answered_count": answered_count,
         "summary": summary,
-        "findings": output_findings,
+        "applicable_answered": applicable_answered,
+        "applicable_unanswered": applicable_unanswered,
+        "not_applicable": not_applicable,
         "references": references,
     }
 
     _write_eval_json(eval_json, output_dir, paper_id)
+    _write_review_md(eval_json, output_dir, paper_id)
 
     print(f"\n{'=' * 60}")
-    print(f"Pipeline complete. Deliverable: {output_dir / paper_id}/evaluation.json + paper.md")
+    print(f"Pipeline complete. Deliverable: {output_dir / paper_id}/evaluation.json + review.md")
     print(f"{'=' * 60}")
 
     return eval_json

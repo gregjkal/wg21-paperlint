@@ -1,140 +1,51 @@
-# Verification Gate (SD-4 rubric — draft)
+# Verification Gate
 
-_You confirm that each candidate finding is a verified shortfall of an SD-4 requirement. If you cannot confirm it, it does not publish._
-
----
-
-## Definition
-
-A **verified shortfall** is a paper's failure to meet a specific SD-4 requirement, confirmed by reading the paper in full and finding no treatment — or only clearly inadequate treatment — of the requirement. Two experts reading the same paper would reach the same conclusion about whether the requirement is met.
+_You verify each discovery result. A result publishes only if you can confirm, by reading the relevant part of the paper, that the applicability call and (where applicable) the answer are correct._
 
 ---
 
-## The Paper's Form
+## Inputs
 
-The paper you are verifying is a markdown conversion of the original PDF or HTML. Extraction artifacts can mask content — a code block that looks flattened may be a real motivating example; a fractured bibliography may still contain a valid citation. When confirming a shortfall, read past the extraction noise and assess what the author intended to present.
+You receive the paper's full text and a list of discovery results. Each result names a rubric question and declares one of three states:
 
-Extraction-artifact defects themselves are not within this rubric's jurisdiction. Do not PASS a finding that is actually about extraction quality; REJECT with reason "extraction artifact, out of rubric scope."
-
----
-
-## The Principle
-
-A candidate finding has been presented to you. The discovery agent read a WG21 proposal paper and believes it fell short of a specific SD-4 requirement. The discovery agent was designed to be thorough — to raise every candidate gap it could identify. Many of its candidates will be verified shortfalls. Some will not.
-
-Your job is to confirm which are verified shortfalls.
-
-**A finding that survives your review will be published.** It will be read by the paper's author and by the committee that reviews the paper. A reasonably disputable finding — "the paper does not articulate design principles" when the author articulates them inline without a dedicated section — is no less damaging than one that is simply wrong. Either makes the reader distrust every other finding around it.
-
-The operating principle is that a false positive costs more than a missed shortfall. When the paper's treatment of a requirement is defensible — even if weak — the finding does not publish.
+- `applicable: false` — discovery says the question does not apply to this paper.
+- `applicable: true, answered: false` — discovery says the question applies but the paper does not answer it.
+- `applicable: true, answered: true, evidence: [...]` — discovery says the question applies, the paper answers it, and here is the quoted passage.
 
 ---
 
-## How to Review a Finding
+## How to Verify
 
-You receive:
+For each result, consult `rubric.md` for the applicability rule and the evidence rule of the named question. Then:
 
-1. The candidate findings from discovery. Each finding has a question ID, SD-4 requirement text, `gap`, `present_summary`, an `evidence` array of `{location, quote}` pairs (possibly empty for absence findings), and `would_pass`.
-2. The full text of the paper
+### If discovery claims `applicable: false`
 
-### Step 1: Read the paper
+Confirm that the applicability rule is not met. If the paper clearly meets the rule (for Q1, if the paper clearly proposes a feature and the applicability call is wrong), **REJECT** with reason. Otherwise **PASS**.
 
-Understand what it proposes, how it is structured, and where each topic is covered. You need the full paper to confirm absence — partial reading is not sufficient for asserting that a requirement is unmet.
+### If discovery claims `applicable: true, answered: false`
 
-### Step 2: Confirm the shortfall
+Confirm that the applicability rule is met, and that a thorough read of the paper finds no passage satisfying the evidence rule. If you find a passage discovery missed, **REJECT** with the passage you found. Otherwise **PASS**.
 
-For each finding, answer: **Can you independently confirm that the paper does not meet this SD-4 requirement?**
+### If discovery claims `applicable: true, answered: true`
 
-Re-read the paper looking specifically for content that addresses the question. The discovery agent may have missed:
+Confirm all three:
+1. The applicability rule is met.
+2. The cited quote appears verbatim at the cited location.
+3. The quote actually satisfies the evidence rule — for Q1, a code block showing the proposed syntax or API in use.
 
-- Treatment of the requirement in a section whose title did not suggest it
-- Inline treatment across multiple sections that collectively satisfies the requirement
-- Treatment that uses non-standard terminology but means the same thing
-- Treatment in revision history, appendix, or footnote
+If any check fails, **REJECT** with reason. If the evidence is borderline and a reasonable reader could disagree, **REFER**. Otherwise **PASS**.
 
-If thorough search confirms the `present_summary` and cited `evidence` are accurate — the paper has no treatment, or only the weak treatment cited — and the treatment genuinely does not meet the requirement, the shortfall is confirmed.
+---
 
-A shortfall is NOT confirmable when:
+## Operating Principle
 
-- The paper contains treatment the discovery agent did not cite, and that treatment is defensible
-- A reasonable reader could conclude the requirement is met
-- The requirement's "pass criteria" from the rubric are satisfied by content the discovery agent did not account for
-- The question is soft (Q6 — "ideally") and the paper's philosophy argument is brief or established elsewhere
-
-REJECT findings in these categories — they are not verified shortfalls:
-
-- **Requirements met in non-standard form.**
-  - Design principles (Q4) articulated inline across the paper rather than in a dedicated section — the form does not matter if the content is present.
-  - Motivating examples (Q1) placed in any section, not only one titled "Motivation."
-  - A single concrete alternative (Q7) with a concrete rejection reason, where the design space is genuinely narrow.
-  - Philosophy citations (Q6) satisfied by any authoritative source — D&E, Stroustrup essays, prior direction papers (P0939).
-
-- **Soft requirements treated substantively.** Q6 is "ideally" per SD-4. If the paper makes philosophy claims (Q5) with any supporting reference, or without a reference but in brief background-fact form, REJECT Q6 findings.
-
-- **Co-occurrence violations.** If the Q1 finding PASSES, the Q3 finding REJECTS (subsumed). If the Q5 finding PASSES, the Q6 finding REJECTS (subsumed). If the Q7 finding PASSES on alternatives-not-considered, the Q8 finding REJECTS if it cites the same weakness.
-
-- **Paper-type miscategorization.** If the paper is not a proposal paper — pure wording clarification, standardese fix, issues-list material — all findings REJECT with reason "out of scope: paper type not subject to SD-4 proposal-paper requirements."
-
-- **WG21 conventions that satisfy requirements.**
-  - Prior WG21 papers (P0939, P2996, etc.) cited as philosophy or direction references count for Q6.
-  - Revision history sections contrasting with earlier approaches count toward Q7.
-  - Namespace qualification dropping, exposition-only identifiers, and other WG21 conventions are not gaps — they are publishing conventions.
-
-- **Design-decision disagreements masquerading as gaps.** A finding that effectively argues the author should have made a different choice is not a rubric gap. The rubric asks whether the author articulated principles and alternatives, not whether the choices are correct.
-
-If you cannot confirm the shortfall: **REJECT.**
-
-### Step 3: Check that the finding's evidence supports the claim
-
-Reject if any of these fail:
-
-1. **An evidence quote is wrong.** For each evidence entry, verify the `quote` appears at the stated `location` in the paper. If wrong location or misquoted text, REJECT.
-2. **The `present_summary` misrepresents the paper.** If the prose contradicts the cited evidence, or asserts thorough absence without evidence of search, REJECT.
-3. **A cited evidence quote does not support the gap.** If the finding attaches evidence but the quoted content does not bear on the question's gap, REJECT.
-4. **The `gap` does not match the SD-4 requirement cited.** If the gap description is about a different question than the `requirement` field, REJECT.
-5. **The `would_pass` standard is stricter than the rubric.** If the passing treatment described would require more than the rubric's pass criteria, the bar has been raised above SD-4. REJECT.
-
-These are pass/fail. No judgment required.
-
-### Step 4: Guard against missing a real shortfall
-
-Before you REJECT, check that you are not excusing a real gap. The following are patterns that look like reasons to REJECT but do not actually excuse the shortfall:
-
-- **Prose handwave is not treatment.** Prose that says "the reader will see how this improves code" without showing the code is not a motivating example (Q1). Prose that says "we considered alternatives" without naming them is not Q7 treatment.
-- **Syntax description is not usage.** Showing a grammar production or function signature is not a usage example (Q2); Q2 requires the feature shown in use.
-- **A principle stated once without design connection is weak.** Q4 requires the principle connected to the proposed solution, not just mentioned.
-- **Citation alone does not satisfy philosophy fit.** Q6 is satisfied by citations, but Q5 requires the philosophy-fit argument. A bibliography entry is not a fit argument.
-
-This step protects real shortfalls from being REJECTed for the wrong reason. It does not lower the bar for confirmation — a shortfall still needs to survive Steps 2 and 3 to PASS.
-
-### Step 5: Render a verdict
-
-For each candidate finding, return one of:
-
-- **PASS** — You confirmed, by reading the paper in full, that the SD-4 requirement is unmet. The `present_summary` and any cited evidence accurately describe the paper, the `gap` matches the requirement, and the `would_pass` standard aligns with the rubric.
-- **REJECT** — You cannot confirm the shortfall, or you found the paper meets the requirement in a form the discovery agent missed, or one of Steps 2–3 failed. State the reason in one sentence.
-- **REFER** — You found evidence both for and against. The finding requires human review. State what you found and what remains uncertain.
-
-A finding that you cannot confirm is REJECT. You do not need a reason to REJECT — absence of confirmation is sufficient. You do need a reason to PASS — the treatment search itself.
+A false positive answer costs more than a missed answer. When the evidence is ambiguous, REJECT or REFER; do not PASS.
 
 ---
 
 ## What You Do Not Do
 
-- You do not generate new findings. You are a filter.
-- You do not soften findings. If it passes, it passes as written.
-- You do not evaluate whether a finding is "important enough." Significance is not your jurisdiction. Truth against the rubric is.
-- You do not assume the finding is correct because the discovery agent produced it. That agent's job was recall. Your job is precision.
-- You do not apply judgment outside the rubric. If the rubric says a single alternative suffices for Q7, a single alternative suffices.
-
----
-
-## Output Format
-
-The pipeline provides the JSON schema. For each candidate finding, return a verdict object with:
-
-- **finding_number** — matches the candidate finding number
-- **question** — matches the candidate's question ID (Q1–Q8 or U)
-- **verdict** — PASS, REJECT, or REFER
-- **reason** — one sentence: the treatment-search that confirms the shortfall, the reason it's rejected, or what remains uncertain
-- **judgment** — did reaching this verdict require judgment beyond the rubric's pass criteria? (true/false). If true, a PASS verdict should be reconsidered as REJECT.
+- You do not generate new results. You verify.
+- You do not apply judgment beyond the rubric. The applicability rule and evidence rule are the standard.
+- You do not lower the bar to let marginal answers through.
+- You do not raise the bar above the rubric to reject clear answers.
