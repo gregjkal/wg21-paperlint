@@ -14,9 +14,9 @@ on-disk writes performed by the orchestrator and CLI go through a backend
 instance so that a future Postgres backend can drop in without touching
 call sites.
 
-Layout used by ``JsonBackend(output_dir)``::
+Layout used by ``JsonBackend(workspace_dir)``::
 
-    <output_dir>/
+    <workspace_dir>/
         mailings/<mailing-id>.json
         <PAPER_ID>/
             paper.md
@@ -71,14 +71,14 @@ class StorageBackend(ABC):
 
 
 class JsonBackend(StorageBackend):
-    """Filesystem-backed JSON storage rooted at ``output_dir``."""
+    """Filesystem-backed JSON storage rooted at ``workspace_dir``."""
 
-    def __init__(self, output_dir: Path | str) -> None:
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, workspace_dir: Path | str) -> None:
+        self.workspace_dir = Path(workspace_dir)
+        self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
     def _paper_dir(self, paper_id: str) -> Path:
-        d = self.output_dir / paper_id.upper()
+        d = self.workspace_dir / paper_id.upper()
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -113,7 +113,7 @@ class JsonBackend(StorageBackend):
     def upsert_mailing_index(
         self, mailing_id: str, papers: list[dict]
     ) -> list[dict]:
-        index_dir = self.output_dir / "mailings"
+        index_dir = self.workspace_dir / "mailings"
         index_dir.mkdir(parents=True, exist_ok=True)
         index_path = index_dir / f"{mailing_id}.json"
 
@@ -147,4 +147,4 @@ class JsonBackend(StorageBackend):
 
     def mailing_index_path(self, mailing_id: str) -> Path:
         """Public accessor used by callers that need the on-disk path."""
-        return self.output_dir / "mailings" / f"{mailing_id}.json"
+        return self.workspace_dir / "mailings" / f"{mailing_id}.json"

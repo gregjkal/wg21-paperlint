@@ -10,19 +10,20 @@
 """Paperlint CLI — evaluate WG21 papers for mechanically verifiable defects.
 
 Usage:
-    python -m paperlint mailing 2026-02 --output-dir ./data/
-    python -m paperlint convert 2026-02 --output-dir ./data/ --max-cap 50 --max-workers 10
-    python -m paperlint eval 2026-02/P3642R4 --output-dir ./data/
-    python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-workers 10
+    python -m paperlint mailing 2026-02 --workspace-dir ./data/
+    python -m paperlint convert 2026-02 --workspace-dir ./data/ --max-cap 50 --max-workers 10
+    python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./data/
+    python -m paperlint run 2026-02 --workspace-dir ./data/ --max-cap 50 --max-workers 10
 
 The open-std.org mailing index is authoritative for paper metadata (title,
 authors, audience, paper_type, canonical URL). Every `eval` invocation names
 the mailing and the paper id explicitly; local file paths and bare paper ids
 are not accepted.
 
-`--output-dir` is the JSON-backend root: paperlint writes a per-paper directory
-plus `mailings/<mailing-id>.json` underneath it. This is the only on-disk
-backend today; a Postgres backend may be added later via the storage API.
+``--workspace-dir`` (alias: ``--output-dir``) is the JSON-backend root: the same
+directory is written and read for mailing indices, converted papers, and
+evaluations. This is the only on-disk backend today; a Postgres backend may be
+added later via the storage API.
 """
 
 import argparse
@@ -44,19 +45,36 @@ from paperlint.orchestrator import (
 )
 from paperlint.storage import JsonBackend
 
+_WORKSPACE_DIR_HELP = (
+    "Workspace directory: mailings/<id>.json, per-paper dirs (paper.md, "
+    "evaluation.json, …), and run's index.json. Same path is read and written. "
+    "Alias: --output-dir."
+)
 
-def _backend_for(output_dir: Path) -> JsonBackend:
-    """Construct the default JSON storage backend rooted at ``output_dir``.
+
+def _add_workspace_dir_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--workspace-dir",
+        "--output-dir",
+        dest="workspace_dir",
+        metavar="DIR",
+        required=True,
+        help=_WORKSPACE_DIR_HELP,
+    )
+
+
+def _backend_for(workspace_dir: Path) -> JsonBackend:
+    """Construct the default JSON storage backend rooted at ``workspace_dir``.
 
     Centralized here so a future ``--storage postgres://...`` flag can be
     added in one place without touching every CLI command.
     """
-    return JsonBackend(output_dir)
+    return JsonBackend(workspace_dir)
 
 
 def _eval_one_paper(
     paper_ref: str,
-    output_dir: Path,
+    workspace_dir: Path,
     source_url: str = "",
     mailing_meta: dict | None = None,
     *,
@@ -65,7 +83,7 @@ def _eval_one_paper(
     try:
         result = run_paper_eval(
             paper_ref,
-            output_dir=output_dir,
+            workspace_dir=workspace_dir,
             source_url=source_url,
             mailing_meta=mailing_meta,
             discovery_passes=discovery_passes,
@@ -76,12 +94,16 @@ def _eval_one_paper(
         return {"paper": paper_ref, "status": "error", "error": str(e)}
 
 
-def _convert_one(paper_ref: str, output_dir: Path, source_url: str,
-                 mailing_meta: dict) -> dict:
+def _convert_one(
+    paper_ref: str,
+    workspace_dir: Path,
+    source_url: str,
+    mailing_meta: dict,
+) -> dict:
     try:
         result = convert_one_paper(
             paper_ref,
-            output_dir=output_dir,
+            workspace_dir=workspace_dir,
             source_url=source_url,
             mailing_meta=mailing_meta,
         )
@@ -107,7 +129,7 @@ def _failure_entry(r: dict) -> dict:
     }
 
 
-def _build_index(output_dir: Path, mailing_id: str, results: list[dict]) -> dict:
+def _build_index(workspace_dir: Path, mailing_id: str, results: list[dict]) -> dict:
     succeeded = [
         r for r in results
         if r["status"] == "ok"
@@ -192,8 +214,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 2
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = Path(args.workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Fetching mailing index for {mailing_id}...")
     papers = fetch_papers_for_mailing(mailing_id)
@@ -201,7 +223,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
         return 1
 
-    backend = _backend_for(output_dir)
+    backend = _backend_for(workspace_dir)
     merged = backend.upsert_mailing_index(mailing_id, papers)
 
     meta = next((p for p in merged if p["paper_id"].lower() == paper_id.lower()), None)
@@ -216,7 +238,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
     try:
         run_paper_eval(
             paper_id,
-            output_dir=output_dir,
+            workspace_dir=workspace_dir,
             source_url=meta.get("url", ""),
             mailing_meta=meta,
             discovery_passes=args.discovery_passes,
@@ -234,8 +256,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     from paperlint.mailing import fetch_papers_for_mailing
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = Path(args.workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     mailing_id = args.mailing_id
     max_cap = args.max_cap
@@ -248,7 +270,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
         return 1
 
-    backend = _backend_for(output_dir)
+    backend = _backend_for(workspace_dir)
     merged = backend.upsert_mailing_index(mailing_id, papers)
 
     meta_by_id = {p["paper_id"]: p for p in merged}
@@ -266,7 +288,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             pm = meta_by_id.get(pid)
             result = _eval_one_paper(
                 pid,
-                output_dir,
+                workspace_dir,
                 source_url=pm["url"] if pm else "",
                 mailing_meta=pm,
                 discovery_passes=args.discovery_passes,
@@ -283,7 +305,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 f = executor.submit(
                     _eval_one_paper,
                     pid,
-                    output_dir,
+                    workspace_dir,
                     pm["url"] if pm else "",
                     pm,
                     discovery_passes=args.discovery_passes,
@@ -296,8 +318,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 status = "OK" if result["status"] == "ok" else "FAILED"
                 print(f"\n  [{status}] {pid}")
 
-    index = _build_index(output_dir, mailing_id, results)
-    index_path = output_dir / "index.json"
+    index = _build_index(workspace_dir, mailing_id, results)
+    index_path = workspace_dir / "index.json"
     index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False), encoding="utf-8")
 
     succeeded = index["succeeded"]
@@ -322,8 +344,8 @@ def cmd_convert(args: argparse.Namespace) -> int:
     """
     from paperlint.mailing import fetch_papers_for_mailing
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = Path(args.workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     mailing_id = args.mailing_id
     max_cap = args.max_cap
@@ -335,7 +357,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
         print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
         return 1
 
-    backend = _backend_for(output_dir)
+    backend = _backend_for(workspace_dir)
     merged = backend.upsert_mailing_index(mailing_id, papers)
 
     meta_by_id = {p["paper_id"]: p for p in merged}
@@ -350,7 +372,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
         for p in papers:
             pid = p["paper_id"]
             pm = meta_by_id.get(pid)
-            r = _convert_one(pid, output_dir, pm["url"] if pm else "", pm)
+            r = _convert_one(pid, workspace_dir, pm["url"] if pm else "", pm)
             results.append(r)
             status = "OK" if r["status"] == "ok" else "FAILED"
             print(f"\n  [{status}] {pid}")
@@ -361,7 +383,11 @@ def cmd_convert(args: argparse.Namespace) -> int:
                 pid = p["paper_id"]
                 pm = meta_by_id.get(pid)
                 f = executor.submit(
-                    _convert_one, pid, output_dir, pm["url"] if pm else "", pm,
+                    _convert_one,
+                    pid,
+                    workspace_dir,
+                    pm["url"] if pm else "",
+                    pm,
                 )
                 futures[f] = pid
             for future in as_completed(futures):
@@ -382,15 +408,15 @@ def cmd_convert(args: argparse.Namespace) -> int:
 def cmd_mailing(args: argparse.Namespace) -> int:
     """Fetch and persist the ground-truth mailing index.
 
-    Writes ``<output-dir>/mailings/<mailing-id>.json``. Idempotent: re-running
+    Writes ``<workspace-dir>/mailings/<mailing-id>.json``. Idempotent: re-running
     keeps existing entries (and their original ``added`` timestamps) and
     appends only newly listed papers.
     """
     from paperlint.mailing import fetch_papers_for_mailing
 
     mailing_id = args.mailing_id
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    workspace_dir = Path(args.workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Fetching mailing index for {mailing_id} from open-std.org...")
     papers = fetch_papers_for_mailing(mailing_id)
@@ -398,7 +424,7 @@ def cmd_mailing(args: argparse.Namespace) -> int:
         print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
         return 1
 
-    backend = _backend_for(output_dir)
+    backend = _backend_for(workspace_dir)
     backend.upsert_mailing_index(mailing_id, papers)
     return 0
 
@@ -418,7 +444,7 @@ def main() -> int:
         "paper",
         help="Paper reference in <mailing-id>/<paper-id> form (e.g. 2026-02/P3642R4)",
     )
-    eval_parser.add_argument("--output-dir", required=True, help="Output directory")
+    _add_workspace_dir_arg(eval_parser)
     eval_parser.add_argument(
         "--discovery-passes",
         type=int,
@@ -431,7 +457,7 @@ def main() -> int:
 
     run_parser = subparsers.add_parser("run", help="Evaluate all papers in a mailing")
     run_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
-    run_parser.add_argument("--output-dir", required=True, help="Output directory")
+    _add_workspace_dir_arg(run_parser)
     run_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
     run_parser.add_argument("--max-workers", type=int, default=10, help="Parallel workers")
     run_parser.add_argument("--max-processes", type=int, default=None, help=argparse.SUPPRESS)
@@ -450,17 +476,13 @@ def main() -> int:
         help="Fetch and convert all papers in a mailing to markdown (no AI eval)",
     )
     convert_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
-    convert_parser.add_argument("--output-dir", required=True, help="Output directory")
+    _add_workspace_dir_arg(convert_parser)
     convert_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
     convert_parser.add_argument("--max-workers", type=int, default=10, help="Parallel workers")
 
     mailing_parser = subparsers.add_parser("mailing", help="Fetch and persist a mailing index")
     mailing_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
-    mailing_parser.add_argument(
-        "--output-dir",
-        required=True,
-        help="Output directory; mailing JSON is written to <output-dir>/mailings/<id>.json",
-    )
+    _add_workspace_dir_arg(mailing_parser)
 
     args = parser.parse_args()
 

@@ -88,19 +88,19 @@ def fetch_paper(paper_id: str, cache_dir: Path | None = None, source_url: str = 
 
 
 def _resolve_storage(
-    output_dir: Path | None, storage: StorageBackend | None
+    workspace_dir: Path | None, storage: StorageBackend | None
 ) -> StorageBackend:
     if storage is not None:
         return storage
-    if output_dir is None:
-        raise ValueError("Either output_dir or storage must be provided.")
-    return JsonBackend(output_dir)
+    if workspace_dir is None:
+        raise ValueError("Either workspace_dir or storage must be provided.")
+    return JsonBackend(workspace_dir)
 
 
 def convert_one_paper(
     paper_id: str,
     *,
-    output_dir: Path | None = None,
+    workspace_dir: Path | None = None,
     source_url: str,
     mailing_meta: dict,
     storage: StorageBackend | None = None,
@@ -108,7 +108,7 @@ def convert_one_paper(
     """Fetch a paper and convert it to markdown, no LLM calls.
 
     Writes ``paper.md`` and ``meta.json`` for the paper through the storage
-    backend (default: a ``JsonBackend`` rooted at ``output_dir``). Used by
+    backend (default: a ``JsonBackend`` rooted at ``workspace_dir``). Used by
     both the convert-only CLI subcommand and ``run_paper_eval`` as the
     first stage of the AI pipeline.
     """
@@ -117,7 +117,7 @@ def convert_one_paper(
         raise ValueError(
             "convert_one_paper requires mailing_meta (authoritative from open-std.org)."
         )
-    backend = _resolve_storage(output_dir, storage)
+    backend = _resolve_storage(workspace_dir, storage)
 
     print(f"Fetching {paper_id}...")
     paper_path = fetch_paper(paper_id, source_url=source_url)
@@ -173,7 +173,7 @@ def _base_eval_json(source_url: str, paper_id: str, mailing_meta: dict | None) -
 def run_paper_eval(
     paper_ref: str,
     *,
-    output_dir: Path | None = None,
+    workspace_dir: Path | None = None,
     source_url: str = "",
     mailing_meta: dict | None = None,
     storage: StorageBackend | None = None,
@@ -192,7 +192,7 @@ def run_paper_eval(
             "Callers must resolve the paper through fetch_papers_for_mailing."
         )
 
-    backend = _resolve_storage(output_dir, storage)
+    backend = _resolve_storage(workspace_dir, storage)
     ensure_api_keys()
     client = build_client()
 

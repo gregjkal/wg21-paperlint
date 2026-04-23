@@ -185,7 +185,7 @@ All LLM calls route through OpenRouter. Paper fetch uses `requests` with a timeo
 ### Intermediate artifacts (per-paper, for debugging)
 
 ```
-{output_dir}/{paper_id}/
+{workspace_dir}/{paper_id}/
 ├── evaluation.json        # the deliverable
 ├── meta.json              # Step 0: metadata (from mailing index)
 ├── paper.md               # extracted text (char-offset ground truth)
@@ -209,9 +209,9 @@ Rerun rule: prompt_hash changed → full rerun. Unchanged → skip.
 ## Invocation
 
 ```bash
-python -m paperlint eval 2026-02/P3642R4 --output-dir ./output/
-python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-workers 10
-python -m paperlint mailing 2026-02
+python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./output/
+python -m paperlint run 2026-02 --workspace-dir ./data/ --max-cap 50 --max-workers 10
+python -m paperlint mailing 2026-02 --workspace-dir ./data/
 ```
 
 ---

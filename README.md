@@ -34,32 +34,32 @@ pip install -e .
 
 Paperlint treats the open-std.org mailing index as authoritative for paper metadata (title, authors, audience, paper_type, canonical URL). Every invocation names the mailing explicitly.
 
-`--output-dir` is the JSON-storage root: every command writes a per-paper directory plus a `mailings/<mailing-id>.json` index underneath it.
+`--workspace-dir` is the **workspace root**: the same directory is used for input and output — mailing index (`mailings/<mailing-id>.json`), per-paper trees (`paper.md`, `evaluation.json`, …), and `index.json` after a full `run`. The legacy alias `--output-dir` is accepted and means the same path.
 
 Fetch and persist a mailing index (ground-truth paper metadata from open-std.org):
 
 ```bash
-python -m paperlint mailing 2026-02 --output-dir ./data/
+python -m paperlint mailing 2026-02 --workspace-dir ./data/
 ```
 
 Convert all papers in a mailing to markdown — no AI evaluation:
 
 ```bash
-python -m paperlint convert 2026-02 --output-dir ./data/ --max-cap 50 --max-workers 10
+python -m paperlint convert 2026-02 --workspace-dir ./data/ --max-cap 50 --max-workers 10
 ```
 
 Evaluate a single paper (mailing-id + paper-id):
 
 ```bash
-python -m paperlint eval 2026-02/P3642R4 --output-dir ./data/
-python -m paperlint eval 2026-02/P3642R4 --output-dir ./data/ --discovery-passes 5
+python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./data/
+python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./data/ --discovery-passes 5
 ```
 
 Evaluate every paper in a mailing (full pipeline, AI included):
 
 ```bash
-python -m paperlint run 2026-02 --output-dir ./data/ --max-cap 50 --max-workers 10
-python -m paperlint run 2026-02 --output-dir ./data/ --discovery-passes 1
+python -m paperlint run 2026-02 --workspace-dir ./data/ --max-cap 50 --max-workers 10
+python -m paperlint run 2026-02 --workspace-dir ./data/ --discovery-passes 1
 ```
 
 Bare paper-ids (`eval P3642R4`) and local file paths (`eval ./paper.pdf`) are not accepted — the caller must name the mailing.

@@ -83,7 +83,7 @@ def test_upsert_mailing_index_preserves_added_for_known_papers(tmp_path: Path):
     assert "added" in by_id["p9999r0"]
 
 
-def test_mailing_index_path_under_output_dir(tmp_path: Path):
+def test_mailing_index_path_under_workspace_dir(tmp_path: Path):
     backend = JsonBackend(tmp_path)
     p = backend.mailing_index_path("2026-02")
     assert p == tmp_path / "mailings" / "2026-02.json"
