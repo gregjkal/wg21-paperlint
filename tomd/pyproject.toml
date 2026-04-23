@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "PDF and HTML to Markdown converter for WG21 papers"
 requires-python = ">=3.12"
 license = {text = "BSL-1.0"}
-authors = [{name = "Sergio DuBois", email = "sentientsergio@gmail.com"}]
+authors = [{name = "Vinnie Falco", email = "vinnie.falco@gmail.com"}]
 dependencies = [
     "pymupdf~=1.27.0",
     "beautifulsoup4~=4.14.0",
