@@ -8,6 +8,7 @@ members = [
     "paperlint",
     "paperstore",
     "tomd",
+    "wg21-paperflow",
 ]
 
 [[package]]
@@ -328,10 +329,9 @@ wheels = [
 
 [[package]]
 name = "paperlint"
-version = "0.1.0"
-source = { editable = "." }
+version = "0.2.0"
+source = { editable = "packages/paperlint" }
 dependencies = [
-    { name = "beautifulsoup4" },
     { name = "mailing" },
     { name = "openai" },
     { name = "paperstore" },
@@ -340,31 +340,15 @@ dependencies = [
     { name = "tomd" },
 ]
 
-[package.optional-dependencies]
-test = [
-    { name = "pytest" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.metadata]
 requires-dist = [
-    { name = "beautifulsoup4", specifier = "~=4.14.0" },
     { name = "mailing", editable = "packages/mailing" },
     { name = "openai" },
     { name = "paperstore", editable = "packages/paperstore" },
-    { name = "pytest", marker = "extra == 'test'", specifier = "~=8.0" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "tomd", editable = "packages/tomd" },
 ]
-provides-extras = ["test"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = "~=8.0" }]
 
 [[package]]
 name = "paperstore"
@@ -613,3 +597,30 @@ sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6
 wheels = [
     { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
 ]
+
+[[package]]
+name = "wg21-paperflow"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "mailing" },
+    { name = "paperlint" },
+    { name = "paperstore" },
+    { name = "tomd" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "mailing", editable = "packages/mailing" },
+    { name = "paperlint", editable = "packages/paperlint" },
+    { name = "paperstore", editable = "packages/paperstore" },
+    { name = "tomd", editable = "packages/tomd" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = "~=8.0" }]

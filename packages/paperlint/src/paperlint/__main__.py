@@ -56,7 +56,7 @@ from paperlint.orchestrator import (
     prompt_hash,
     run_paper_eval,
 )
-from paperlint.storage import JsonBackend
+from paperstore import JsonBackend
 
 _WORKSPACE_DIR_HELP = (
     "Workspace directory: mailings/<id>.json, per-paper dirs (paper.md, "
@@ -276,7 +276,7 @@ def _parse_eval_ref(ref: str) -> tuple[str, str]:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    from paperlint.mailing import fetch_papers_for_mailing
+    from mailing.scrape import fetch_papers_for_mailing
 
     try:
         mailing_id, paper_id = _parse_eval_ref(args.paper)
@@ -324,7 +324,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from paperlint.mailing import fetch_papers_for_mailing
+    from mailing.scrape import fetch_papers_for_mailing
 
     workspace_dir = Path(args.workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -421,7 +421,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
     index, with no LLM calls. The AI evaluation pipeline is opt-in via the
     ``run`` (or ``eval``) subcommand.
     """
-    from paperlint.mailing import fetch_papers_for_mailing
+    from mailing.scrape import fetch_papers_for_mailing
 
     workspace_dir = Path(args.workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
@@ -500,7 +500,7 @@ def cmd_mailing(args: argparse.Namespace) -> int:
     keeps existing entries (and their original ``added`` timestamps) and
     appends only newly listed papers.
     """
-    from paperlint.mailing import fetch_papers_for_mailing
+    from mailing.scrape import fetch_papers_for_mailing
 
     mailing_id = args.mailing_id
     workspace_dir = Path(args.workspace_dir)
