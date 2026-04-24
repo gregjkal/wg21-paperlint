@@ -142,7 +142,7 @@ How `wg21-website` (private) calls into `cppalliance/wg21-paperlint` (public):
 ```python
 # In wg21-website (private):
 from paperlint.orchestrator import convert_one_paper
-from paperlint.mailing import fetch_mailing_index
+from mailing.scrape import fetch_papers_for_mailing
 
 @app.task
 def process_mailing(mailing_id: str):

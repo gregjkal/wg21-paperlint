@@ -10,7 +10,7 @@ These are pure-function tests; no network, no LLM, no filesystem.
 import pytest
 
 from paperlint.__main__ import _EVAL_CONTRACT_MSG, _parse_eval_ref
-from paperlint.mailing import _infer_paper_type
+from mailing.scrape import _infer_paper_type
 
 
 class TestParseEvalRef:
