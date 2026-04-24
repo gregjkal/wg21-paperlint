@@ -9,10 +9,10 @@
 
 """Tests for the JSON storage backend.
 
-Covers the on-disk layout described in ``paperlint.storage`` and the
+Covers the on-disk layout defined in :mod:`paperstore.json_backend` and the
 idempotency contract for ``upsert_mailing_index``: re-running keeps each
-existing entry (and its original ``added`` timestamp) and only appends
-new papers.
+existing entry (and its original ``added`` timestamp) and only appends new
+papers.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from paperlint.storage import JsonBackend
+from paperstore import JsonBackend
 
 
 def test_layout_paper_md_meta_eval_intermediate(tmp_path: Path):
