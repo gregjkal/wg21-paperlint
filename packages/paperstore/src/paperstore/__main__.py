@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from paperstore import JsonBackend
+from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
 from paperstore.errors import MissingMailingIndexError, MissingMetaError
 
 
@@ -91,10 +91,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--workspace-dir",
-        required=True,
+        default=default_workspace_dir(),
         metavar="DIR",
         type=Path,
-        help="Paperstore JSON backend root.",
+        help=f"Paperstore JSON backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

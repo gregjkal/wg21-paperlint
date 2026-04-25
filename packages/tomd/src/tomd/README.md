@@ -10,30 +10,34 @@ for version control, pull request diffs, and plain-text review workflows.
 
 ## Install
 
-From this directory:
+tomd is a member of the paperflow uv workspace; install it from the workspace
+root:
 
 ```
-pip install -e .
+uv sync                       # installs all four packages + dev deps
+source .venv/bin/activate     # puts tomd, mailing, paperstore, paperlint on PATH
 ```
 
 Requires Python 3.12 or newer. Runtime dependencies (`pymupdf~=1.27`,
 `beautifulsoup4~=4.14`, `mistune~=3.2`) are declared in `pyproject.toml`
-and installed automatically.
+and installed automatically. Outside an activated venv, prefix any command
+with `uv run` (`uv run tomd ...`).
 
 ## Usage
 
-tomd reads sources staged in a paperstore workspace (run `python -m mailing` first):
+tomd reads sources staged in a paperstore workspace (run `mailing` first). Workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`; override per command with `--workspace-dir`.
 
 ```
-python -m tomd P3642R4 --workspace-dir ./data            # one paper
-python -m tomd P3642R4 P3700R0 --workspace-dir ./data    # multiple
-python -m tomd 2026-04 --workspace-dir ./data            # every paper in mailing 2026-04
-python -m tomd 2026-04 P3700R0 --workspace-dir ./data    # mix mailing + paper ids
-python -m tomd 2026-04 --workspace-dir ./data --qa       # batch QA scoring
-python -m tomd 2026-04 --workspace-dir ./data -v         # verbose logging
+tomd P3642R4                       # one paper
+tomd P3642R4 P3700R0               # multiple
+tomd 2026-04                       # every paper in mailing 2026-04
+tomd 2026-04 P3700R0               # mix mailing + paper ids
+tomd 2026-04 --qa                  # batch QA scoring
+tomd 2026-04 -v                    # verbose logging
+tomd 2026-04 --workspace-dir ./alt # explicit workspace override
 ```
 
-Mailing-id positionals (matching `YYYY-MM`) expand to every paper id in that mailing's index, in stored order. The mailing index must already exist on disk - run `python -m mailing <id> --workspace-dir DIR` first, otherwise tomd raises `MissingMailingIndexError`.
+Mailing-id positionals (matching `YYYY-MM`) expand to every paper id in that mailing's index, in stored order. The mailing index must already exist on disk - run `mailing <id>` first, otherwise tomd raises `MissingMailingIndexError`.
 
 The pre-0.2 file-path interface (`tomd input.pdf`) was removed.
 
@@ -111,11 +115,10 @@ Read these in order if you are modifying tomd.
 
 ## Development
 
-Install test extras and run the suite:
+Run the suite from the workspace root:
 
 ```
-pip install -e .[test]
-pytest tests/
+uv run --package tomd pytest
 ```
 
 ## License

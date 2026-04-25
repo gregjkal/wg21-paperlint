@@ -12,22 +12,27 @@ The split is deliberate: scrape is reused outside any storage context (one-off m
 
 ## CLI
 
+After `uv sync && source .venv/bin/activate` from the workspace root (or prefix with `uv run`). Workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`; override per command with `--workspace-dir`.
+
 ```
 # Default: fetch index + download every paper's source. Idempotent;
 # re-running is a no-op when there are no new papers.
-python -m mailing 2026-04 --workspace-dir ./scratch
+mailing 2026-04
 
 # Index only, no downloads
-python -m mailing 2026-04 --index-only --workspace-dir ./scratch
+mailing 2026-04 --index-only
 
 # Force re-download of every source (use after a tomd-side bytes change)
-python -m mailing 2026-04 --refetch --workspace-dir ./scratch
+mailing 2026-04 --refetch
 
 # Subset (repeatable -p, or comma-separated --papers)
-python -m mailing 2026-04 -p P3642R4 -p P3700R0 --workspace-dir ./scratch
+mailing 2026-04 -p P3642R4 -p P3700R0
 
 # Single paper (also idempotent unless --refetch)
-python -m mailing 2026-04/P3642R4 --workspace-dir ./scratch
+mailing 2026-04/P3642R4
+
+# Explicit workspace override (alternative to $PAPERFLOW_WORKSPACE)
+mailing 2026-04 --workspace-dir ./scratch
 ```
 
 The mailing index is authoritative for paper title/authors/audience/paper-type and is upserted; existing rows keep their original `added` timestamps. Already-staged sources are detected via `paperstore.StorageBackend.get_source_path` and skipped. Filtering with `--paper`/`--papers` is mailing-only; pair it with `--refetch` to re-download a specific subset.

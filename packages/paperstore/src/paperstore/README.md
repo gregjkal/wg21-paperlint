@@ -36,9 +36,12 @@ Backend methods (see `StorageBackend` for the ABC):
 
 ## CLI
 
+After `uv sync && source .venv/bin/activate` from the workspace root (or prefix with `uv run`). Workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`; override per command with `--workspace-dir`.
+
 ```
-python -m paperstore --workspace-dir ./scratch show-paper P3642R4
-python -m paperstore --workspace-dir ./scratch list-mailings
+paperstore show-paper P3642R4
+paperstore list-mailings
+paperstore --workspace-dir ./scratch list-mailings   # explicit override
 ```
 
 ## Tests

@@ -37,8 +37,13 @@ Python 3.12+. There is no lockfile beyond `uv.lock`. Development install:
 
 ```bash
 uv sync                                   # installs all four packages + dev deps
+source .venv/bin/activate                 # puts paperlint, tomd, mailing, paperstore on PATH
 export OPENROUTER_API_KEY=sk-or-...       # .env / .env.local also auto-loaded
 ```
+
+All CLI examples in the docs assume the venv is active. Outside an activated venv, prefix with `uv run` (`uv run paperlint convert ...`).
+
+Workspace location: every CLI defaults `--workspace-dir` to `$PAPERFLOW_WORKSPACE` if set, otherwise `./data`. Helper: `paperstore.default_workspace_dir()` (reused by all four CLIs). Override per invocation with `--workspace-dir`; pin across shells with `export PAPERFLOW_WORKSPACE=...`.
 
 `mistune`, `pymupdf`, and `beautifulsoup4` are runtime deps of `tomd` (not test-only) because `paperlint`'s convert path imports `tomd` at module-load time.
 
@@ -51,9 +56,9 @@ Two-step flow:
 
 Bare paper ids (`eval P3642R4`) and local file paths are not accepted; every invocation names the mailing explicitly. The open-std.org mailing index is authoritative for title / authors / audience / paper_type and is refetched on every `convert` / `eval` / `run` (index only; not the PDFs).
 
-`--workspace-dir` (alias `--output-dir`) is both the input and output root for the default `JsonBackend`. `--papers A,B` / `--paper X` filter the mailing list, then `--max-cap N` slices, then `--max-workers N` parallelizes. `--discovery-passes N` (default 3) controls the multi-pass discovery stage.
+`--workspace-dir` (alias `--output-dir`) is both the input and output root for the default `JsonBackend`; it defaults to `$PAPERFLOW_WORKSPACE` or `./data`. `--papers A,B` / `--paper X` filter the mailing list, then `--max-cap N` slices, then `--max-workers N` parallelizes. `--discovery-passes N` (default 3) controls the multi-pass discovery stage.
 
-Per-package CLIs (`python -m paperstore`, `python -m mailing ...`, `python -m tomd ...`) are also installed.
+Per-package CLIs (`paperstore`, `mailing ...`, `tomd ...`) are also installed.
 
 ## Running tests
 
