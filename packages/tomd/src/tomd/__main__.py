@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2026 Sergio DuBois (sentientsergio@gmail.com)
+# Copyright (c) 2026 Greg Kaleka (greg@gregkaleka.com)
 #
 # Distributed under the Boost Software License, Version 1.0. (See accompanying
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -78,7 +78,8 @@ def _cmd_convert(
     for pid in paper_ids:
         try:
             convert_paper(pid, backend, write_prompts=write_prompts)
-            print(f"Converted {pid}")
+            md_path = backend.workspace_dir / pid.upper() / "paper.md"
+            print(f"Converted {pid} -> {md_path}")
         except (MissingSourceError, MissingMetaError) as e:
             print(f"Skipping {pid}: {e}", file=sys.stderr)
             rc = max(rc, 2)
