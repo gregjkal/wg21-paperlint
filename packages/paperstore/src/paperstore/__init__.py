@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from paperstore.backend import StorageBackend
@@ -23,6 +24,17 @@ from paperstore.errors import (
     PaperstoreError,
 )
 from paperstore.json_backend import JsonBackend
+
+WORKSPACE_ENV_VAR = "PAPERFLOW_WORKSPACE"
+
+
+def default_workspace_dir() -> Path:
+    """Resolve the default workspace path: ``$PAPERFLOW_WORKSPACE`` or ``./data``.
+
+    Empty or unset env var yields ``./data`` (cwd-relative).
+    """
+    env = os.environ.get(WORKSPACE_ENV_VAR, "").strip()
+    return Path(env) if env else Path("./data")
 
 
 def from_uri(
@@ -55,4 +67,6 @@ __all__ = [
     "MissingPaperMdError",
     "MissingMailingIndexError",
     "from_uri",
+    "default_workspace_dir",
+    "WORKSPACE_ENV_VAR",
 ]

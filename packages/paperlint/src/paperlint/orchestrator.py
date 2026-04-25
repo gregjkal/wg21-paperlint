@@ -163,7 +163,7 @@ def load_converted_paper(
     if not md_path.is_file() or not meta_path.is_file():
         raise FileNotFoundError(
             f"Missing converted paper artifacts for {pid}. "
-            f"Run: python -m paperlint convert <mailing-id> --workspace-dir {backend.workspace_dir} "
+            f"Run: paperlint convert <mailing-id> --workspace-dir {backend.workspace_dir} "
             f"(use --papers {pid} to convert only this paper). "
             f"Expected {md_path} and {meta_path}."
         )

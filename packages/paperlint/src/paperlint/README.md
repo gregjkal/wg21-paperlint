@@ -4,15 +4,17 @@ The LLM pipeline that finds mechanically verifiable defects in WG21 C++ standard
 
 ## Two-step flow
 
+After `uv sync && source .venv/bin/activate` from the workspace root (or prefix any command with `uv run`). Workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`; override per command with `--workspace-dir` (alias `--output-dir`).
+
 Conversion is separated from evaluation so eval/run never duplicate fetch + tomd work.
 
 ```bash
 # 1) Convert: fetch sources, build paper.md + meta.json. No LLM, no API key.
-python -m paperlint convert 2026-04 --workspace-dir ./data --paper P3642R4
+paperlint convert 2026-04 --paper P3642R4
 
 # 2) Evaluate: load the converted artifacts, run the LLM pipeline.
 export OPENROUTER_API_KEY=sk-or-...
-python -m paperlint eval 2026-04/P3642R4 --workspace-dir ./data
+paperlint eval 2026-04/P3642R4
 ```
 
 `run` is the batch form of `eval`. Bare paper ids (`eval P3642R4`) and local file paths are not accepted; every invocation names the mailing explicitly so the open-std.org index stays authoritative.

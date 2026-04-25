@@ -9,13 +9,16 @@
 
 """Mailing CLI: scrape an open-std.org mailing index and stage paper sources.
 
+Workspace dir defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``; pass
+``--workspace-dir`` to override per command.
+
 Usage::
 
-    python -m mailing 2026-04 --workspace-dir ./data              # index + all sources (idempotent)
-    python -m mailing 2026-04 --index-only --workspace-dir ./data # index only, no downloads
-    python -m mailing 2026-04 --refetch --workspace-dir ./data    # re-download every source
-    python -m mailing 2026-04/P3642R4 --workspace-dir ./data      # one paper (still idempotent)
-    python -m mailing 2026-04 --paper P3642R4 -p P3700R0 --workspace-dir ./data
+    mailing 2026-04                          # index + all sources (idempotent)
+    mailing 2026-04 --index-only             # index only, no downloads
+    mailing 2026-04 --refetch                # re-download every source
+    mailing 2026-04/P3642R4                  # one paper (still idempotent)
+    mailing 2026-04 --paper P3642R4 -p P3700R0
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ import re
 import sys
 from pathlib import Path
 
-from paperstore import JsonBackend
+from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
 from paperstore.errors import MissingSourceError
 
 from mailing.batch import stage_mailing
@@ -90,10 +93,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--workspace-dir",
-        required=True,
+        default=default_workspace_dir(),
         metavar="DIR",
         type=Path,
-        help="Paperstore JSON backend root.",
+        help=f"Paperstore JSON backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
     )
     parser.add_argument(
         "--index-only",

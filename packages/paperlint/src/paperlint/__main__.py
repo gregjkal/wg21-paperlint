@@ -18,8 +18,8 @@ Two-step flow (no duplicate conversion in eval/run):
 
 Example::
 
-    python -m paperlint convert 2026-02 --workspace-dir ./data/ --paper P3642R4
-    python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./data/
+    paperlint convert 2026-02 --paper P3642R4
+    paperlint eval 2026-02/P3642R4
 
 The open-std.org mailing index is authoritative for paper metadata. Every
 ``eval``/``run``/``convert`` run refreshes ``mailings/<id>.json``. Local file
@@ -27,8 +27,9 @@ paths and bare paper ids are not accepted.
 
 ``--workspace-dir`` (alias: ``--output-dir``) is the JSON-backend root: the same
 directory is written and read for mailing indices, converted papers, and
-evaluations. This is the only on-disk backend today; a Postgres backend may be
-added later via the storage API.
+evaluations. It defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``. This is
+the only on-disk backend today; a Postgres backend may be added later via
+the storage API.
 """
 
 import argparse
@@ -56,12 +57,12 @@ from paperlint.orchestrator import (
     prompt_hash,
     run_paper_eval,
 )
-from paperstore import JsonBackend
+from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
 
 _WORKSPACE_DIR_HELP = (
     "Workspace directory: mailings/<id>.json, per-paper dirs (paper.md, "
     "evaluation.json, …), and run's index.json. Same path is read and written. "
-    "Alias: --output-dir."
+    f"Alias: --output-dir. Default: ${WORKSPACE_ENV_VAR} or ./data."
 )
 
 
@@ -71,7 +72,7 @@ def _add_workspace_dir_arg(p: argparse.ArgumentParser) -> None:
         "--output-dir",
         dest="workspace_dir",
         metavar="DIR",
-        required=True,
+        default=default_workspace_dir(),
         help=_WORKSPACE_DIR_HELP,
     )
 
@@ -223,7 +224,7 @@ _EPILOG_RUN = (
 )
 _EPILOG_EVAL = (
     "Loads paper.md and meta.json from the workspace; run "
-    "'paperlint convert <mailing> --workspace-dir … --paper <id>' first if missing."
+    "'paperlint convert <mailing> --paper <id>' first if missing."
 )
 
 

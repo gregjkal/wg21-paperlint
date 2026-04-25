@@ -9,19 +9,22 @@
 
 """tomd CLI: convert paperstore-staged WG21 papers to markdown.
 
+Workspace dir defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``; pass
+``--workspace-dir`` to override per command.
+
 Usage::
 
-    python -m tomd P3642R4 --workspace-dir ./data
-    python -m tomd 2026-04 --workspace-dir ./data            # all papers in mailing 2026-04
-    python -m tomd P3642R4 P3700R0 --workspace-dir ./data    # multiple paper ids
-    python -m tomd 2026-04 --workspace-dir ./data --qa       # batch QA scoring
+    tomd P3642R4
+    tomd 2026-04                  # all papers in mailing 2026-04
+    tomd P3642R4 P3700R0          # multiple paper ids
+    tomd 2026-04 --qa             # batch QA scoring
 
 Mailing-id positionals (matching ``YYYY-MM``) expand to every paper id
-in that mailing's index. Run ``python -m mailing <mailing-id>
---workspace-dir DIR`` first to populate the index.
+in that mailing's index. Run ``mailing <mailing-id>`` first to populate
+the index.
 
 The pre-0.2 file-path interface (``tomd input.pdf``) is removed; stage
-sources with ``python -m mailing`` first.
+sources with ``mailing`` first.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ import re
 import sys
 from pathlib import Path
 
-from paperstore import JsonBackend
+from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
 from paperstore.errors import (
     MissingMailingIndexError,
     MissingMetaError,
@@ -128,10 +131,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--workspace-dir",
-        required=True,
+        default=default_workspace_dir(),
         metavar="DIR",
         type=Path,
-        help="Paperstore JSON backend root.",
+        help=f"Paperstore JSON backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
     )
     parser.add_argument(
         "-v", "--verbose",

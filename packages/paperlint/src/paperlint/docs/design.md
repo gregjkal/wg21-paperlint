@@ -122,7 +122,7 @@ Two concrete backends behind the same Python interface (`storage.py`):
 - One JSON file per paper, one per mailing index
 - Markdown stored as `.md` files alongside JSON
 - Used for local replication, testing, CI, debugging
-- Invocation: `python -m paperlint run 2026-02 --workspace-dir ./data/`
+- Invocation: `paperlint run 2026-02` (workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`)
 
 **Postgres backend** (production):
 - Implemented in `wg21-website` (private), not in this repo
@@ -160,23 +160,23 @@ wg21-paperlint is installed as a Git submodule. Django imports it as a Python li
 
 ## 8. CLI Contracts
 
-Each stage is independently runnable with JSON files as I/O:
+Each stage is independently runnable with JSON files as I/O. Workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`; pass `--workspace-dir` to override.
 
 ```bash
 # Fetch and scrape mailing index only
-python -m paperlint mailing 2026-02 --workspace-dir ./data/
+paperlint mailing 2026-02
 
 # Convert all papers to markdown (no LLM, parallel)
-python -m paperlint convert 2026-02 --workspace-dir ./data/ [--max-workers 10]
+paperlint convert 2026-02 [--max-workers 10]
 
 # Run full eval pipeline on one paper (suspended; for future use)
-python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./data/
+paperlint eval 2026-02/P3642R4
 
 # Batch eval all papers in a mailing (suspended; for future use)
-python -m paperlint run 2026-02 --workspace-dir ./data/ [--max-cap 10]
+paperlint run 2026-02 [--max-cap 10]
 
 # tomd standalone (paperlint downloads the paper first; tomd receives local path)
-python -m tomd 2026-02/P3642R4 --workspace-dir ./data/
+tomd 2026-02/P3642R4
 ```
 
 CLI requires `<mailing-id>/<paper-id>` form; bare paper-id or local path returns a clean error (decided in PR #43).
@@ -396,9 +396,9 @@ Rerun rule: prompt_hash changed → full rerun. Unchanged → skip.
 ### Invocation
 
 ```bash
-python -m paperlint eval 2026-02/P3642R4 --workspace-dir ./output/
-python -m paperlint run 2026-02 --workspace-dir ./data/ --max-cap 50 --max-workers 10
-python -m paperlint mailing 2026-02 --workspace-dir ./data/
+paperlint eval 2026-02/P3642R4
+paperlint run 2026-02 --max-cap 50 --max-workers 10
+paperlint mailing 2026-02
 ```
 
 ---
