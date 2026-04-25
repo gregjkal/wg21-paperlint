@@ -22,27 +22,55 @@ paperlint    -> paperstore, mailing, tomd
 
 ## Install
 
-Python 3.12 or newer. uv replaces the old `pip install -e ".[test]"` flow:
+Python 3.12 or newer. Paperflow uses [uv](https://docs.astral.sh/uv/) for dependency management; install it via the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) if you don't already have it.
 
 ```bash
 git clone https://github.com/cppalliance/paperlint.git wg21-paperflow
 cd wg21-paperflow
 uv sync                              # installs all four packages + dev deps
 source .venv/bin/activate            # puts paperlint, tomd, mailing, paperstore on PATH
-export OPENROUTER_API_KEY=sk-or-...  # required for paperlint eval / run
 ```
 
-`.env` and `.env.local` are auto-loaded. All examples below assume the venv is active; to run without activating, prefix any CLI command with `uv run` (e.g. `uv run paperlint convert ...`).
+`.env` and `.env.local` are auto-loaded. All examples below assume the venv is active; to run without activating, prefix any CLI command with `uv run` (e.g. `uv run paperlint convert ...`). `paperlint eval` and `paperlint run` additionally need `OPENROUTER_API_KEY` in the environment; the `mailing` and `tomd` flows do not.
 
 ## Workspace location
 
 Every CLI defaults its workspace root to `$PAPERFLOW_WORKSPACE` if set, otherwise `./data` (cwd-relative). Override per command with `--workspace-dir <DIR>`. Pin a fixed location across shells with `export PAPERFLOW_WORKSPACE=/path/to/workspace`. Examples below omit the flag and rely on the default.
 
-## Two-step flow
+## Quickstart: iterating on tomd
 
-Conversion is separated from evaluation so eval/run never duplicate work.
+This is the conversion loop, no LLM and no API key. Good entry point for anyone improving the PDF/HTML-to-Markdown path.
 
 ```bash
+# One-time setup (see Install above).
+uv sync && source .venv/bin/activate
+
+# 1. Download a mailing's papers (idempotent; re-runs skip what's already staged).
+mailing 2026-04
+
+# 2. Convert the whole corpus to Markdown. Each success line prints the output path.
+tomd 2026-04
+
+# 3. Inspect the output.
+ls ./data/*/paper.md
+open ./data/P3642R4/paper.md                    # or your editor of choice
+
+# 4. Score conversion quality across the corpus.
+tomd 2026-04 --qa                               # ranked report to stdout
+tomd 2026-04 --qa --qa-json qa.json             # + per-paper JSON for diffing
+```
+
+Outputs land at `./data/<PAPER_ID>/paper.md` (plus `<PAPER_ID>.prompts.json` when the converter flagged uncertain regions). The mailing index lives at `./data/mailings/2026-04.json`.
+
+**Edit-rerun loop.** Change tomd source, then rerun `tomd 2026-04`; it overwrites `paper.md` in place, so you can `git diff` the workspace (or snapshot `qa.json` before and after) to see what moved. `mailing 2026-04` does not need to run again unless you want fresh source bytes; add `--refetch` to force a re-download.
+
+## Two-step flow (paperlint)
+
+Conversion is separated from evaluation so eval/run never duplicate work. This path needs `OPENROUTER_API_KEY` in the environment.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+
 # 1) Convert a paper (no LLM, no API key).
 paperlint convert 2026-04 --paper P3642R4
 
@@ -54,25 +82,15 @@ The open-std.org mailing index is authoritative for paper metadata and is refetc
 
 ## Per-package CLIs
 
-Each package ships its own CLI for direct use; the natural flow without paperlint is `mailing` then `tomd`:
+`mailing` and `tomd` are covered in the tomd quickstart above. Two extras:
 
 ```bash
-# Fetch index + download every paper's source. Idempotent: re-running with
-# no new papers is a no-op for the network.
-mailing 2026-04
-
-# Convert every paper in the mailing to markdown (mailing-id expands).
-tomd 2026-04
-
-# Score conversion quality across the corpus, writing per-paper metrics elsewhere.
-tomd 2026-04 --qa --qa-json ./qa.json
-
 # Inspect what's stored.
 paperstore list-mailings
 paperstore show-paper P3642R4
 ```
 
-Single-paper variants are still available (`mailing 2026-04/P3642R4`, `tomd P3642R4`).
+Single-paper variants are available on both CLIs (`mailing 2026-04/P3642R4`, `tomd P3642R4`). See each package's README for the full option set: [`mailing`](packages/mailing/src/mailing/README.md), [`tomd`](packages/tomd/src/tomd/README.md), [`paperstore`](packages/paperstore/src/paperstore/README.md), [`paperlint`](packages/paperlint/src/paperlint/README.md).
 
 ## Tests
 

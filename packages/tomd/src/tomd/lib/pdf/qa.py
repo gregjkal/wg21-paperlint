@@ -212,14 +212,25 @@ def _score(m: QAMetrics) -> tuple[int, list[str]]:
 
 _HTML_EXTENSIONS = frozenset({".html", ".htm"})
 _PDF_EXTENSIONS = frozenset({".pdf"})
+_MD_EXTENSIONS = frozenset({".md"})
 
 
 def _qa_one(path_str: str) -> dict:
-    """Run the appropriate pipeline and score the Markdown output."""
+    """Score the Markdown output for a single input.
+
+    Accepts a pre-converted ``.md`` file (scored directly), a PDF (converted
+    via the full pipeline first), or an HTML file (converted via the HTML
+    pipeline first). The CLI's ``--qa`` mode passes ``paper.md`` paths.
+    """
     path = Path(path_str)
     ext = path.suffix.lower()
 
     try:
+        if ext in _MD_EXTENSIONS:
+            md_text = path.read_text(encoding="utf-8")
+            m = compute_metrics(md_text, file=str(path))
+            return asdict(m)
+
         if ext in _HTML_EXTENSIONS:
             from ..html import convert_html
             md_text, _ = convert_html(path)
@@ -255,10 +266,13 @@ def _qa_metrics_from_dict(d: dict) -> QAMetrics:
 
 def run_qa_report(paths: list[Path], json_path: Path | None = None,
                   workers: int = 1, timeout: int = 120) -> None:
-    """Run QA scoring on a list of PDF/HTML files and print a ranked report.
+    """Score a batch of inputs and print a ranked report.
 
-    Uses *workers* parallel processes (default 1 = sequential).
-    *timeout* is seconds of no progress before aborting remaining files.
+    *paths* may be pre-converted ``.md`` files (scored directly), PDFs, or
+    HTML files (either will be converted first). The ``--qa`` CLI passes
+    ``paper.md`` paths. Uses *workers* parallel processes (default 1 =
+    sequential); *timeout* is seconds of no progress before aborting
+    remaining files.
     """
     total = len(paths)
     results: list[QAMetrics] = []

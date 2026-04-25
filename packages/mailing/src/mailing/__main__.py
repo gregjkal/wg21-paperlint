@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2026 Sergio DuBois (sentientsergio@gmail.com)
+# Copyright (c) 2026 Greg Kaleka (greg@gregkaleka.com)
 #
 # Distributed under the Boost Software License, Version 1.0. (See accompanying
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
@@ -171,6 +171,10 @@ def main() -> int:
         f"Mailing {mailing_id}: {counts['papers_in_index']} papers in index, "
         f"{counts['downloaded']} downloaded, {counts['skipped']} already staged, "
         f"{counts['no_url']} without url, {counts['filtered_out']} filtered out."
+    )
+    print(
+        f"Sources under {store.workspace_dir} (one dir per paper id); "
+        f"index at {store.mailing_index_path(mailing_id)}."
     )
     return 0
 

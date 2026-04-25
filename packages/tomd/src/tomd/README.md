@@ -43,19 +43,22 @@ The pre-0.2 file-path interface (`tomd input.pdf`) was removed.
 
 ### QA mode
 
-Score conversion quality across a batch of PDFs without inspecting each
-output by hand:
+Score conversion quality across a batch of papers without inspecting each
+output by hand. QA reads the `paper.md` files already written by a
+previous `tomd` run, so convert first, then score:
 
 ```
-tomd --qa *.pdf *.html                         # ranked report to stdout
-tomd --qa --workers 16 *.pdf *.html            # parallel (16 processes)
-tomd --qa --qa-json report.json *.pdf *.html   # + detailed per-file JSON
-tomd --qa --workers 16 --timeout 180 *.pdf     # abort stragglers after 3m
+tomd 2026-04                                        # convert the corpus
+tomd 2026-04 --qa                                   # ranked report to stdout
+tomd 2026-04 --qa --qa-json report.json             # + detailed per-paper JSON
+tomd 2026-04 --qa --workers 16                      # parallel (16 processes)
+tomd 2026-04 --qa --workers 16 --timeout 180        # abort stragglers after 3m
 ```
 
-Each file is converted and then scored by parsing the Markdown output with
-mistune. The score (0-100) reflects heading structure, code block detection,
-front-matter completeness, uncertain regions, and unfenced code.
+Each `paper.md` is parsed with mistune and scored on heading structure,
+code block detection, front-matter completeness, uncertain regions, and
+unfenced code. The score is 0-100. Papers that haven't been converted yet
+are skipped with a pointer to run convert first.
 
 ### Output
 

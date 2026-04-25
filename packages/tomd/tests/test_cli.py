@@ -6,11 +6,35 @@ interface (``tomd input.pdf``) was removed in the 0.2 restructure.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 from paperstore import JsonBackend
+
+
+_SAMPLE_MD = """\
+---
+title: "Sample"
+document: P1234R0
+date: 2026-04-01
+audience: LEWG
+reply-to:
+  - "Author <author@example.com>"
+---
+
+## 1 Introduction
+
+Body text.
+
+```cpp
+void foo() { return; }
+```
+
+- bullet one
+- bullet two
+"""
 
 
 def test_tomd_help_succeeds():
@@ -33,3 +57,32 @@ def test_tomd_missing_source_errors(tmp_path: Path):
     )
     assert result.returncode != 0
     assert "source" in result.stderr.lower()
+
+
+def test_tomd_qa_scores_pre_converted_md(tmp_path: Path):
+    """`tomd <mailing> --qa` must score paper.md files without reconverting.
+
+    Regression test: an earlier refactor routed .md paths through the PDF
+    pipeline (fitz.open), which crashed on markdown input.
+    """
+    store = JsonBackend(tmp_path)
+    store.upsert_mailing_index(
+        "2026-04", [{"paper_id": "P1234R0", "title": "Sample", "paper_type": "proposal"}]
+    )
+    store.write_paper_md("P1234R0", _SAMPLE_MD)
+
+    qa_json = tmp_path / "qa.json"
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "tomd", "2026-04",
+            "--qa", "--qa-json", str(qa_json),
+            "--workspace-dir", str(tmp_path),
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert qa_json.exists()
+    payload = json.loads(qa_json.read_text())
+    assert len(payload) == 1
+    assert payload[0]["score"] > 0
+    assert "pipeline error" not in " ".join(payload[0].get("issues", []))
