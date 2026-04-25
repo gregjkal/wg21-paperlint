@@ -25,10 +25,8 @@ paperlint    -> paperstore, mailing, tomd
 Python 3.12 or newer. Paperflow uses [uv](https://docs.astral.sh/uv/) for dependency management; install it via the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation/) if you don't already have it.
 
 ```bash
-git clone https://github.com/cppalliance/paperlint.git wg21-paperflow
-cd wg21-paperflow
-uv sync                              # installs all four packages + dev deps
-source .venv/bin/activate            # puts paperlint, tomd, mailing, paperstore on PATH
+uv sync                     # installs all four packages + dev deps
+source .venv/bin/activate   # puts paperlint, tomd, mailing, paperstore on PATH
 ```
 
 `.env` and `.env.local` are auto-loaded. All examples below assume the venv is active; to run without activating, prefix any CLI command with `uv run` (e.g. `uv run paperlint convert ...`). `paperlint eval` and `paperlint run` additionally need `OPENROUTER_API_KEY` in the environment; the `mailing` and `tomd` flows do not.
