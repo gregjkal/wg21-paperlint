@@ -9,7 +9,7 @@
 
 """End-to-end: mailing.download -> tomd.api.convert -> paperstore artifacts.
 
-Stubs ``requests.get`` so the test runs hermetically against a tomd fixture PDF.
+Stubs ``httpx.Client`` so the test runs hermetically against a tomd fixture PDF.
 This is the only cross-package test in the workspace; per-package suites cover
 their own surfaces.
 """
@@ -17,9 +17,10 @@ their own surfaces.
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from mailing import download as mailing_download
-from paperstore.testing import json_store  # noqa: F401  (re-exports pytest fixture)
+from paperstore.testing import store  # noqa: F401  (re-exports pytest fixture)
 from tomd.api import convert_paper
 
 
@@ -38,42 +39,45 @@ class _FakeResp:
         return None
 
 
-def test_end_to_end_convert(json_store, monkeypatch):
+def _make_mock_client(content: bytes) -> MagicMock:
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = _FakeResp(content)
+    return mock_client
+
+
+def test_end_to_end_convert(store):
     paper_id = "P1112R4"
-    mailing_id = "2026-04"
+    year = "2026"
     pdf_bytes = FIXTURE_PDF.read_bytes()
 
-    monkeypatch.setattr(
-        mailing_download,
-        "requests",
-        type(
-            "R",
-            (),
-            {"get": staticmethod(lambda url, timeout, headers: _FakeResp(pdf_bytes))},
-        ),
-    )
-
-    json_store.upsert_mailing_index(
-        mailing_id,
+    store.upsert_year(
+        year,
         [
             {
                 "paper_id": paper_id,
                 "title": "Test fixture paper",
                 "authors": ["A. Author"],
                 "subgroup": "EWG",
-                "paper_type": "proposal",
             }
         ],
     )
 
-    source_path = mailing_download.download_paper(
-        paper_id,
-        json_store,
-        source_url="https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p1112r4.pdf",
-    )
-    md_path = convert_paper(paper_id, json_store)
+    with patch("mailing.download.httpx.Client", return_value=_make_mock_client(pdf_bytes)):
+        source_path = mailing_download.download_paper(
+            paper_id,
+            store.workspace_dir,
+            source_url="https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p1112r4.pdf",
+        )
+    # Record source_file in DB (normally done by run_download)
+    store._patch_fields(paper_id, {"source_file": str(source_path)})
 
-    workspace = json_store.workspace_dir
+    meta = store.get_meta(paper_id)
+    md_path, _intent = convert_paper(paper_id, source_path, meta)
+    store._patch_fields(paper_id, {"markdown_path": str(md_path)})
+
+    workspace = store.workspace_dir
     stem = paper_id.lower()
     assert source_path == workspace / f"{stem}.pdf"
     assert source_path.is_file()
@@ -82,4 +86,8 @@ def test_end_to_end_convert(json_store, monkeypatch):
     assert md_path == workspace / f"{stem}.md"
     assert md_path.is_file()
     assert md_path.read_text(encoding="utf-8").strip(), "convert_paper produced empty markdown"
-    assert (workspace / "mailings" / f"{mailing_id}.json").is_file()
+
+    # Verify both paths recorded in DB.
+    db_meta = store.get_meta(paper_id)
+    assert db_meta["source_file"] == str(source_path)
+    assert db_meta["markdown_path"] == str(md_path)

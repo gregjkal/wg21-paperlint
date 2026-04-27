@@ -2,7 +2,7 @@
 
 from tomd.api import _strip_toc
 from paperlint.models import Evidence, Finding
-from paperlint.pipeline import normalized_char_offset_map, step_verify_quotes
+from paperlint.steps import normalized_char_offset_map, step_verify_quotes
 
 
 def test_normalized_char_offset_map_basic():

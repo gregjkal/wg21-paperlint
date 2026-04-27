@@ -15,16 +15,12 @@ Workspace dir defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``; pass
 Usage::
 
     tomd P3642R4
-    tomd 2026-04                  # all papers in mailing 2026-04
+    tomd 2026                     # all papers for year 2026
     tomd P3642R4 P3700R0          # multiple paper ids
-    tomd 2026-04 --qa             # batch QA scoring
+    tomd 2026 --qa                # batch QA scoring
 
-Mailing-id positionals (matching ``YYYY-MM``) expand to every paper id
-in that mailing's index. Run ``mailing <mailing-id>`` first to populate
-the index.
-
-The pre-0.2 file-path interface (``tomd input.pdf``) is removed; stage
-sources with ``mailing`` first.
+Year positionals (4-digit) expand to every paper id for that year in the
+local index. Run ``paperflow mailing <year>`` first to populate the index.
 """
 
 from __future__ import annotations
@@ -35,7 +31,7 @@ import re
 import sys
 from pathlib import Path
 
-from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
+from paperstore import WORKSPACE_ENV_VAR, SqliteBackend, default_workspace_dir
 from paperstore.errors import (
     MissingMailingIndexError,
     MissingMetaError,
@@ -45,26 +41,23 @@ from paperstore.errors import (
 
 from tomd.api import convert_paper
 
-_MAILING_RE = re.compile(r"^\d{4}-\d{2}$")
+_YEAR_RE = re.compile(r"^\d{4}$")
 
 
 def expand_references(
-    references: list[str], backend: JsonBackend
+    references: list[str], backend: SqliteBackend
 ) -> list[str]:
-    """Expand mailing ids in ``references`` to their paper-id rows.
+    """Expand year references to their paper-id lists.
 
-    Each positional is either a mailing id (``YYYY-MM``, expanded via
-    ``backend.list_mailing``) or a paper id (passed through, uppercased).
-    Paper-id order is preserved within each input; mailing expansion
-    follows the index's stored order.
+    Each positional is either a year (``YYYY``, expanded via
+    ``backend.list_papers_for_year``) or a paper id (passed through, uppercased).
 
-    Raises ``MissingMailingIndexError`` if a mailing-id positional has no
-    persisted index.
+    Raises ``MissingMailingIndexError`` if a year positional has no persisted index.
     """
     out: list[str] = []
     for ref in references:
-        if _MAILING_RE.match(ref):
-            rows = backend.list_mailing(ref)
+        if _YEAR_RE.match(ref):
+            rows = backend.list_papers_for_year(ref)
             out.extend(row["paper_id"].upper() for row in rows)
         else:
             out.append(ref.upper())
@@ -72,12 +65,21 @@ def expand_references(
 
 
 def _cmd_convert(
-    paper_ids: list[str], backend: JsonBackend, *, write_prompts: bool
+    paper_ids: list[str], backend: SqliteBackend, *, write_prompts: bool
 ) -> int:
     rc = 0
     for pid in paper_ids:
         try:
-            md_path = convert_paper(pid, backend, write_prompts=write_prompts)
+            source_path = backend.get_source_path(pid)
+            meta = backend.get_meta(pid)
+            md_path, intent = convert_paper(
+                pid, source_path, meta, write_prompts=write_prompts
+            )
+            # Record markdown path and intent in DB
+            backend._patch_fields(pid.strip().upper(), {
+                "markdown_path": str(md_path),
+                **({"intent": intent} if intent else {}),
+            })
             print(f"Converted {pid} -> {md_path}")
         except (MissingSourceError, MissingMetaError) as e:
             print(f"Skipping {pid}: {e}", file=sys.stderr)
@@ -90,7 +92,7 @@ def _cmd_convert(
 
 def _cmd_qa(
     paper_ids: list[str],
-    backend: JsonBackend,
+    backend: SqliteBackend,
     *,
     json_path: Path | None,
     workers: int,
@@ -127,14 +129,14 @@ def main() -> int:
         "references",
         nargs="+",
         metavar="REF",
-        help="Paper ids (e.g. P3642R4) or mailing ids (e.g. 2026-04, expands to all).",
+        help="Paper ids (e.g. P3642R4) or year (e.g. 2026, expands to all papers).",
     )
     parser.add_argument(
         "--workspace-dir",
         default=default_workspace_dir(),
         metavar="DIR",
         type=Path,
-        help=f"Paperstore JSON backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
+        help=f"Paperstore backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -169,7 +171,7 @@ def main() -> int:
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(name)s: %(message)s")
 
-    backend = JsonBackend(args.workspace_dir)
+    backend = SqliteBackend(args.workspace_dir)
 
     try:
         paper_ids = expand_references(args.references, backend)

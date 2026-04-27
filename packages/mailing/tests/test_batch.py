@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mailing.batch import stage_mailing
-from paperstore.testing import json_store  # noqa: F401  (pytest fixture)
+from paperstore.testing import store  # noqa: F401  (pytest fixture)
 
 
 def _rows(*paper_ids: str) -> list[dict]:
@@ -26,25 +26,30 @@ def _rows(*paper_ids: str) -> list[dict]:
             "title": f"Paper {pid}",
             "authors": [],
             "subgroup": "EWG",
-            "paper_type": "proposal",
         }
         for pid in paper_ids
     ]
 
 
-def test_stage_mailing_first_run_downloads_all(json_store):
+def _fake_download(download_calls: list[str]):
+    """Return a fake download function that records calls and writes a stub file."""
+    def _download(pid: str, workspace_dir: Path, *, source_url: str) -> Path:
+        download_calls.append(pid)
+        path = workspace_dir / f"{pid.lower()}.pdf"
+        path.write_bytes(b"%PDF-1.7\n")
+        return path
+    return _download
+
+
+def test_stage_mailing_first_run_downloads_all(store):
     rows = _rows("P1000R0", "P1001R0")
     download_calls: list[str] = []
 
-    def fake_download(pid, store, *, source_url):
-        download_calls.append(pid)
-        return store.put_source(pid, b"%PDF-1.7\n", suffix=".pdf")
-
     counts = stage_mailing(
-        "2099-01",
-        json_store,
+        "2026-01",
+        store,
         fetch_papers=lambda mid: rows,
-        download=fake_download,
+        download=_fake_download(download_calls),
     )
 
     assert counts == {
@@ -57,54 +62,36 @@ def test_stage_mailing_first_run_downloads_all(json_store):
     assert sorted(download_calls) == ["P1000R0", "P1001R0"]
 
 
-def test_stage_mailing_second_run_is_a_noop(json_store):
+def test_stage_mailing_second_run_is_a_noop(store):
     rows = _rows("P1000R0", "P1001R0")
     download_calls: list[str] = []
+    fake = _fake_download(download_calls)
 
-    def fake_download(pid, store, *, source_url):
-        download_calls.append(pid)
-        return store.put_source(pid, b"%PDF-1.7\n", suffix=".pdf")
-
-    stage_mailing(
-        "2099-01",
-        json_store,
-        fetch_papers=lambda mid: rows,
-        download=fake_download,
-    )
+    stage_mailing("2026-01", store, fetch_papers=lambda mid: rows, download=fake)
     assert len(download_calls) == 2
 
-    counts = stage_mailing(
-        "2099-01",
-        json_store,
-        fetch_papers=lambda mid: rows,
-        download=fake_download,
-    )
+    counts = stage_mailing("2026-01", store, fetch_papers=lambda mid: rows, download=fake)
 
     assert counts["downloaded"] == 0
     assert counts["skipped"] == 2
     assert len(download_calls) == 2  # no extra calls
 
 
-def test_stage_mailing_picks_up_new_papers_only(json_store):
+def test_stage_mailing_picks_up_new_papers_only(store):
     download_calls: list[str] = []
-
-    def fake_download(pid, store, *, source_url):
-        download_calls.append(pid)
-        return store.put_source(pid, b"%PDF-1.7\n", suffix=".pdf")
+    fake = _fake_download(download_calls)
 
     stage_mailing(
-        "2099-01",
-        json_store,
+        "2026-01", store,
         fetch_papers=lambda mid: _rows("P1000R0"),
-        download=fake_download,
+        download=fake,
     )
     assert download_calls == ["P1000R0"]
 
     counts = stage_mailing(
-        "2099-01",
-        json_store,
+        "2026-01", store,
         fetch_papers=lambda mid: _rows("P1000R0", "P1001R0"),
-        download=fake_download,
+        download=fake,
     )
 
     assert counts["downloaded"] == 1
@@ -112,40 +99,28 @@ def test_stage_mailing_picks_up_new_papers_only(json_store):
     assert download_calls == ["P1000R0", "P1001R0"]
 
 
-def test_stage_mailing_refetch_redownloads_all(json_store):
+def test_stage_mailing_refetch_redownloads_all(store):
     rows = _rows("P1000R0", "P1001R0")
     download_calls: list[str] = []
+    fake = _fake_download(download_calls)
 
-    def fake_download(pid, store, *, source_url):
-        download_calls.append(pid)
-        return store.put_source(pid, b"%PDF-1.7\n", suffix=".pdf")
-
-    stage_mailing(
-        "2099-01", json_store,
-        fetch_papers=lambda mid: rows, download=fake_download,
-    )
-    counts = stage_mailing(
-        "2099-01", json_store, refetch=True,
-        fetch_papers=lambda mid: rows, download=fake_download,
-    )
+    stage_mailing("2026-01", store, fetch_papers=lambda mid: rows, download=fake)
+    counts = stage_mailing("2026-01", store, refetch=True, fetch_papers=lambda mid: rows, download=fake)
 
     assert counts["downloaded"] == 2
     assert counts["skipped"] == 0
     assert len(download_calls) == 4  # two per run
 
 
-def test_stage_mailing_filter_subset(json_store):
+def test_stage_mailing_filter_subset(store):
     rows = _rows("P1000R0", "P1001R0", "P1002R0")
     download_calls: list[str] = []
 
-    def fake_download(pid, store, *, source_url):
-        download_calls.append(pid)
-        return store.put_source(pid, b"%PDF-1.7\n", suffix=".pdf")
-
     counts = stage_mailing(
-        "2099-01", json_store,
+        "2026-01", store,
         papers={"P1001R0"},
-        fetch_papers=lambda mid: rows, download=fake_download,
+        fetch_papers=lambda mid: rows,
+        download=_fake_download(download_calls),
     )
 
     assert counts["downloaded"] == 1
@@ -153,11 +128,11 @@ def test_stage_mailing_filter_subset(json_store):
     assert download_calls == ["P1001R0"]
 
 
-def test_stage_mailing_no_papers_in_mailing(json_store):
+def test_stage_mailing_no_papers_in_mailing(store):
     counts = stage_mailing(
-        "2099-01", json_store,
+        "2026-01", store,
         fetch_papers=lambda mid: [],
-        download=lambda *a, **kw: Path("/dev/null"),
+        download=lambda pid, wdir, *, source_url: Path("/dev/null"),
     )
     assert counts == {
         "papers_in_index": 0,
@@ -168,7 +143,7 @@ def test_stage_mailing_no_papers_in_mailing(json_store):
     }
 
 
-def test_stage_mailing_row_without_url(json_store):
+def test_stage_mailing_row_without_url(store):
     rows = [
         {
             "paper_id": "P1000R0",
@@ -177,18 +152,14 @@ def test_stage_mailing_row_without_url(json_store):
             "title": "no url",
             "authors": [],
             "subgroup": "EWG",
-            "paper_type": "proposal",
         }
     ]
     download_calls: list[str] = []
 
-    def fake_download(pid, store, *, source_url):
-        download_calls.append(pid)
-        return store.put_source(pid, b"x", suffix=".pdf")
-
     counts = stage_mailing(
-        "2099-01", json_store,
-        fetch_papers=lambda mid: rows, download=fake_download,
+        "2026-01", store,
+        fetch_papers=lambda mid: rows,
+        download=_fake_download(download_calls),
     )
 
     assert counts["no_url"] == 1

@@ -11,7 +11,7 @@ from __future__ import annotations
 from mailing.scrape import (
     discover_years,
     fetch_all_mailings_for_year,
-    fetch_papers_for_mailing,
+    fetch_papers_for_year,
     parse_all_mailings,
 )
 
@@ -68,8 +68,8 @@ def test_parse_all_mailings_empty_page():
 _PAGE_URL = "https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/"
 
 
-def test_fetch_papers_for_mailing_uses_year_page(monkeypatch):
-    """fetch_papers_for_mailing now delegates to fetch_all_mailings_for_year."""
+def test_fetch_papers_for_year_returns_merged_papers(monkeypatch):
+    """fetch_papers_for_year merges all monthly mailings for the year."""
     import mailing.scrape as mod
 
     def fake_fetch(year, *, timeout=60.0):
@@ -77,19 +77,22 @@ def test_fetch_papers_for_mailing_uses_year_page(monkeypatch):
         return parse_all_mailings(YEAR_PAGE_HTML, _PAGE_URL)
 
     monkeypatch.setattr(mod, "fetch_all_mailings_for_year", fake_fetch)
-    papers = fetch_papers_for_mailing("2026-04")
-    assert len(papers) == 2
-    assert papers[0]["paper_id"] == "p3000r5"
+    papers = fetch_papers_for_year("2026")
+    # All papers from both mailings (3 total, de-duped by paper_id)
+    assert len(papers) == 3
+    pids = {p["paper_id"] for p in papers}
+    assert "p3000r5" in pids
+    assert "p2900r14" in pids
 
 
-def test_fetch_papers_for_mailing_missing_mailing(monkeypatch):
+def test_fetch_papers_for_year_empty_year(monkeypatch):
     import mailing.scrape as mod
 
     def fake_fetch(year, *, timeout=60.0):
-        return parse_all_mailings(YEAR_PAGE_HTML, _PAGE_URL)
+        return {}
 
     monkeypatch.setattr(mod, "fetch_all_mailings_for_year", fake_fetch)
-    papers = fetch_papers_for_mailing("2026-03")
+    papers = fetch_papers_for_year("2099")
     assert papers == []
 
 

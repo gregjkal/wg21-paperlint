@@ -14,7 +14,6 @@ Paper metadata, gated findings, and the paper text, structured as JSON:
   "title": "Carry-less product: std::clmul",
   "authors": ["Jan Schultke"],
   "audience": "LEWG",
-  "paper_type": "proposal",
   "findings": [
     {
       "location": "§6 Proposed wording, [simd.clmul]",

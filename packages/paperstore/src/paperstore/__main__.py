@@ -20,7 +20,7 @@ import json
 import sys
 from pathlib import Path
 
-from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
+from paperstore import SqliteBackend, WORKSPACE_ENV_VAR, default_workspace_dir
 from paperstore.errors import (
     MissingEvaluationError,
     MissingMailingIndexError,
@@ -30,20 +30,19 @@ from paperstore.errors import (
 )
 
 
-def _cmd_list_mailings(backend: JsonBackend) -> int:
-    mailings_dir = backend.workspace_dir / "mailings"
-    if not mailings_dir.is_dir():
-        print(f"No mailings directory under {backend.workspace_dir}", file=sys.stderr)
+def _cmd_list_years(backend: SqliteBackend) -> int:
+    years = backend.list_years()
+    if not years:
+        print("No years in database.", file=sys.stderr)
         return 1
-    for p in sorted(mailings_dir.glob("*.json")):
-        rows = json.loads(p.read_text(encoding="utf-8"))
-        print(f"{p.stem}\t{len(rows)} papers")
+    for year, count in years:
+        print(f"{year}\t{count} papers")
     return 0
 
 
-def _cmd_show_mailing(backend: JsonBackend, mailing_id: str) -> int:
+def _cmd_show_year(backend: SqliteBackend, year: str) -> int:
     try:
-        rows = backend.list_mailing(mailing_id)
+        rows = backend.list_papers_for_year(year)
     except MissingMailingIndexError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -54,7 +53,7 @@ def _cmd_show_mailing(backend: JsonBackend, mailing_id: str) -> int:
     return 0
 
 
-def _has_source(backend: JsonBackend, pid: str) -> bool:
+def _has_source(backend: SqliteBackend, pid: str) -> bool:
     try:
         backend.get_source_path(pid)
         return True
@@ -62,7 +61,7 @@ def _has_source(backend: JsonBackend, pid: str) -> bool:
         return False
 
 
-def _has_paper_md(backend: JsonBackend, pid: str) -> bool:
+def _has_paper_md(backend: SqliteBackend, pid: str) -> bool:
     try:
         backend.get_paper_md(pid)
         return True
@@ -70,7 +69,7 @@ def _has_paper_md(backend: JsonBackend, pid: str) -> bool:
         return False
 
 
-def _has_evaluation(backend: JsonBackend, pid: str) -> bool:
+def _has_evaluation(backend: SqliteBackend, pid: str) -> bool:
     try:
         backend.get_evaluation(pid)
         return True
@@ -78,16 +77,16 @@ def _has_evaluation(backend: JsonBackend, pid: str) -> bool:
         return False
 
 
-def _cmd_ls_papers(backend: JsonBackend, mailing_id: str | None) -> int:
-    if mailing_id:
+def _cmd_ls_papers(backend: SqliteBackend, year: str | None) -> int:
+    if year:
         try:
-            rows = backend.list_mailing(mailing_id)
+            rows = backend.list_papers_for_year(year)
         except MissingMailingIndexError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
         ids = [row["paper_id"].upper() for row in rows]
     else:
-        ids = backend.list_paper_ids()
+        ids = backend.list_all_paper_ids()
 
     for pid in ids:
         marks = "".join(
@@ -103,7 +102,7 @@ def _cmd_ls_papers(backend: JsonBackend, mailing_id: str | None) -> int:
     return 0
 
 
-def _cmd_show_paper(backend: JsonBackend, paper_id: str) -> int:
+def _cmd_show_paper(backend: SqliteBackend, paper_id: str) -> int:
     try:
         meta = backend.get_meta(paper_id)
     except MissingMetaError as e:
@@ -123,33 +122,33 @@ def main() -> int:
         default=default_workspace_dir(),
         metavar="DIR",
         type=Path,
-        help=f"Paperstore JSON backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
+        help=f"Paperstore backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list-mailings", help="List stored mailing ids with paper counts.")
+    sub.add_parser("list-years", help="List stored years with paper counts.")
 
-    show_m = sub.add_parser("show-mailing", help="List paper ids + titles in a mailing.")
-    show_m.add_argument("mailing_id")
+    show_y = sub.add_parser("show-year", help="List paper ids + titles for a year.")
+    show_y.add_argument("year")
 
     ls = sub.add_parser(
         "ls-papers",
         help="List staged papers. Marks: s=source, m=paper.md, e=evaluation.json.",
     )
-    ls.add_argument("mailing_id", nargs="?", default=None)
+    ls.add_argument("year", nargs="?", default=None)
 
     show_p = sub.add_parser("show-paper", help="Print a paper's metadata JSON.")
     show_p.add_argument("paper_id")
 
     args = parser.parse_args()
-    backend = JsonBackend(args.workspace_dir)
+    backend = SqliteBackend(args.workspace_dir)
 
-    if args.command == "list-mailings":
-        return _cmd_list_mailings(backend)
-    if args.command == "show-mailing":
-        return _cmd_show_mailing(backend, args.mailing_id)
+    if args.command == "list-years":
+        return _cmd_list_years(backend)
+    if args.command == "show-year":
+        return _cmd_show_year(backend, args.year)
     if args.command == "ls-papers":
-        return _cmd_ls_papers(backend, args.mailing_id)
+        return _cmd_ls_papers(backend, args.year)
     if args.command == "show-paper":
         return _cmd_show_paper(backend, args.paper_id)
     parser.print_help()

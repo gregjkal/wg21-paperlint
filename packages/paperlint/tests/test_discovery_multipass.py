@@ -16,7 +16,7 @@ import json
 import pytest
 
 from paperlint.models import PaperMeta
-from paperlint.pipeline import step_discovery
+from paperlint.steps import step_discovery
 
 
 def _meta() -> PaperMeta:
@@ -25,7 +25,6 @@ def _meta() -> PaperMeta:
         title="Test Title",
         authors=["Alice"],
         target_group="LEWG",
-        paper_type="proposal",
         source_file="/tmp/p1.html",
         run_timestamp="2026-01-01T00:00:00+00:00",
         model="test-model",

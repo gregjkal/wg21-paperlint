@@ -15,9 +15,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
-import requests
-
-from paperstore.backend import StorageBackend
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -37,32 +35,77 @@ def _suffix_from_url(source_url: str) -> str:
     return ".html" if suffix == ".htm" else suffix
 
 
+def content_length(url: str, *, timeout: float = 30.0) -> int | None:
+    """Send a HEAD request and return Content-Length as int, or None if absent.
+
+    Uses ``Accept-Encoding: identity`` to get the uncompressed size.
+    Returns ``None`` if the header is missing or the request fails.
+    """
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            resp = client.head(
+                url,
+                headers={
+                    "User-Agent": _USER_AGENT,
+                    "Accept-Encoding": "identity",
+                },
+            )
+            resp.raise_for_status()
+        cl = resp.headers.get("content-length")
+        return int(cl) if cl is not None else None
+    except Exception:
+        logger.debug("HEAD request failed for %s", url, exc_info=True)
+        return None
+
+
 def download_paper(
     paper_id: str,
-    store: StorageBackend,
+    workspace_dir: Path,
     *,
     source_url: str,
     timeout: float = _FETCH_TIMEOUT_SEC,
-) -> Path:
-    """Download a paper's source file and stage it in the paperstore.
+    refetch: bool = False,
+) -> Path | None:
+    """Download a paper's source file to ``workspace_dir``.
 
-    ``source_url`` is authoritative (from the mailing index). Returns the
-    local path written by :meth:`StorageBackend.put_source`. Re-running
-    with the same bytes is a no-op.
+    Writes atomically via a temp file (``P3642R4.tmp.pdf`` → ``P3642R4.pdf``).
+    Does NOT touch the database - the caller is responsible for persisting
+    the returned path to storage.
+
+    Returns the local path on success, or ``None`` if ``source_url`` is empty.
     """
     if not source_url:
-        raise ValueError(
-            f"download_paper requires source_url (from the mailing index). paper={paper_id}"
-        )
+        logger.warning("No source URL for %s - skipping download", paper_id)
+        return None
 
     suffix = _suffix_from_url(source_url)
+    pid_lower = paper_id.strip().upper().lower()
+    final_path = Path(workspace_dir) / f"{pid_lower}{suffix}"
+    temp_path = final_path.with_stem(final_path.stem + ".tmp")
+
     logger.info("Downloading %s from %s", paper_id, source_url)
-    resp = requests.get(
-        source_url,
+
+    with httpx.Client(
         timeout=timeout,
+        follow_redirects=True,
         headers={"User-Agent": _USER_AGENT},
-    )
-    resp.raise_for_status()
-    path = store.put_source(paper_id, resp.content, suffix=suffix)
-    logger.info("Staged %s at %s", paper_id, path)
-    return path
+    ) as client:
+        resp = client.get(source_url)
+        resp.raise_for_status()
+
+    if temp_path.exists():
+        temp_path.unlink()
+    temp_path.write_bytes(resp.content)
+
+    import os, time
+    for _ in range(10):
+        try:
+            os.replace(temp_path, final_path)
+            break
+        except PermissionError:
+            time.sleep(0.1)
+    else:
+        os.replace(temp_path, final_path)
+
+    logger.info("Staged %s at %s", paper_id, final_path)
+    return final_path

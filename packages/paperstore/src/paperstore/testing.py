@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from paperstore import JsonBackend
+from paperstore import SqliteBackend
 
 
 @pytest.fixture
-def json_store(tmp_path):
-    """A fresh ``JsonBackend`` rooted at pytest's per-test ``tmp_path``."""
-    return JsonBackend(tmp_path)
+def store(tmp_path):
+    """A fresh ``SqliteBackend`` rooted at pytest's per-test ``tmp_path``."""
+    return SqliteBackend(tmp_path)

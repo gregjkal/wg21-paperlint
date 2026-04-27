@@ -26,19 +26,20 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mailing.download import download_paper
 from paperlint.credentials import ensure_api_keys
 from paperlint.logutil import configure_paperlint_file_logging_if_needed, get_paperlint_logger
 from paperlint.llm import OPENROUTER_MODEL, build_client
 from paperlint.models import (
     SCHEMA_VERSION,
+    ConvertResult,
     Evaluation,
     OutputFinding,
+    Paper,
     PaperMeta,
     Reference,
     to_dict,
 )
-from paperlint.pipeline import (
+from paperlint.steps import (
     PROMPTS_DIR,
     RUBRIC_PATH,
     step_discovery,
@@ -47,7 +48,7 @@ from paperlint.pipeline import (
     step_verify_quotes,
 )
 from paperlint.suppress import step_suppress_known_fps
-from paperstore import JsonBackend, StorageBackend
+from paperstore import SqliteBackend, StorageBackend
 from paperstore.errors import MissingMetaError, MissingPaperMdError
 from tomd.api import convert_paper as tomd_convert_paper
 
@@ -82,66 +83,51 @@ def _resolve_storage(
             "(both are None). CLI entrypoints pass --workspace-dir; library callers "
             "should pass either workspace_dir=Path(...) or storage=<StorageBackend>."
         )
-    return JsonBackend(workspace_dir)
+    return SqliteBackend(workspace_dir)
 
 
-def convert_one_paper(
-    paper_id: str,
-    *,
-    workspace_dir: Path | None = None,
-    source_url: str,
-    mailing_meta: dict,
-    storage: StorageBackend | None = None,
-) -> dict:
-    """Fetch a paper, stage it in paperstore, and convert it to markdown. No LLM.
+def convert_one_paper(paper: "Paper") -> "ConvertResult":
+    """Convert a staged paper source to markdown. No LLM, no database access.
 
-    Flow:
-        1. ``mailing.download.download_paper`` writes the source via
-           :meth:`StorageBackend.put_source`.
-        2. ``tomd.api.convert_paper`` reads source + mailing-meta through the
-           backend, converts, and writes ``paper.md`` back through the backend.
-        3. ``PaperMeta`` is built here from ``mailing_meta`` and written to
-           ``meta.json``.
+    Takes a :class:`Paper` object with ``source_file`` populated. Writes the
+    markdown to disk atomically. Returns a :class:`ConvertResult` - the caller
+    (``jobs.run_convert``) is responsible for persisting the result to the DB.
 
-    Invoked from the ``convert`` CLI. ``run``/``eval`` use
-    :func:`load_converted_paper` instead to avoid duplicate work.
+    Raises:
+        RuntimeError: source_file is empty - run ``paperflow download`` first.
+        RuntimeError: tomd produced no usable markdown.
     """
-    paper_id = paper_id.strip().upper()
-    if mailing_meta is None:
-        raise ValueError(
-            "convert_one_paper requires mailing_meta (authoritative from open-std.org)."
+    paper_id = paper.document_id.strip().upper()
+
+    if not paper.source_file:
+        raise RuntimeError(
+            f"{paper_id} source not staged. Run 'paperflow download {paper_id}' first."
         )
-    backend = _resolve_storage(workspace_dir, storage)
 
-    print(f"Fetching {paper_id}...")
-    paper_path = download_paper(paper_id, backend, source_url=source_url)
-
-    paper_md_path = tomd_convert_paper(paper_id, backend)
-
-    authors = mailing_meta.get("authors", []) or []
-    if isinstance(authors, str):
-        authors = [a.strip() for a in authors.split(",") if a.strip()]
-
-    meta = PaperMeta(
-        paper=paper_id,
-        title=mailing_meta.get("title", "") or "",
-        authors=authors,
-        target_group=mailing_meta.get("subgroup", "") or "",
-        paper_type=mailing_meta.get("paper_type", "proposal") or "proposal",
-        source_file=str(paper_path),
-        run_timestamp=datetime.now(timezone.utc).isoformat(),
-        model=OPENROUTER_MODEL,
-    )
-
-    meta_path = backend.write_meta_json(paper_id, asdict(meta))
-
-    return {
+    source_path = Path(paper.source_file)
+    meta = {
         "paper_id": paper_id,
-        "paper_path": paper_path,
-        "paper_md_path": paper_md_path,
-        "meta_path": meta_path,
-        "meta": meta,
+        "title": paper.title,
+        "authors": paper.authors,
+        "target_group": paper.audience,
+        "subgroup": paper.audience,
+        "document_date": paper.document_date,
+        "intent": paper.intent,
+        "url": paper.url,
     }
+
+    md_path, extracted_intent = tomd_convert_paper(paper_id, source_path, meta)
+
+    # tomd front-matter intent wins over scraper-derived intent
+    intent = extracted_intent if extracted_intent else paper.intent
+
+    return ConvertResult(
+        paper_id=paper_id,
+        markdown_path=str(md_path),
+        intent=intent,
+        title=paper.title,
+        status="ok",
+    )
 
 
 def load_converted_paper(
@@ -152,12 +138,11 @@ def load_converted_paper(
 ) -> tuple[str, PaperMeta]:
     """Load the converted markdown and metadata for ``paper_id``.
 
-    Reads through the storage backend (no workspace path arithmetic);
-    eval-stage callers must have run ``paperlint convert`` first.
+    Reads through the storage backend; eval-stage callers must have run
+    ``paperflow convert`` first.
 
     Raises:
-        FileNotFoundError: if either the markdown or the metadata is
-            missing, or the metadata cannot be parsed.
+        FileNotFoundError: if either the markdown or the metadata is missing.
     """
     backend = _resolve_storage(workspace_dir, storage)
     pid = paper_id.strip().upper()
@@ -166,31 +151,33 @@ def load_converted_paper(
     except MissingPaperMdError as e:
         raise FileNotFoundError(
             f"Missing converted markdown for {pid}. "
-            f"Run paperlint convert first. ({e})"
+            f"Run paperflow convert first. ({e})"
         ) from e
     try:
         raw_meta = backend.get_meta(pid)
     except MissingMetaError as e:
         raise FileNotFoundError(
             f"Missing metadata for {pid}. "
-            f"Run paperlint convert first. ({e})"
+            f"Run paperflow convert first. ({e})"
         ) from e
     meta = PaperMeta.from_dict(raw_meta)
     return md, meta
 
 
 def _base_evaluation(
-    source_url: str, paper_id: str, mailing_meta: dict | None
+    paper_id: str, mailing_meta: dict | None
 ) -> Evaluation:
     """Build the skeleton :class:`Evaluation` with whatever metadata is available."""
     if mailing_meta:
         title = mailing_meta.get("title", "Unknown")
         authors = list(mailing_meta.get("authors", []) or [])
         audience = mailing_meta.get("subgroup", "Unknown")
+        source_url = mailing_meta.get("url", "")
     else:
         title = "Unknown"
         authors = []
         audience = "Unknown"
+        source_url = ""
 
     return Evaluation(
         schema_version=SCHEMA_VERSION,
@@ -202,7 +189,6 @@ def _base_evaluation(
         title=title,
         authors=authors,
         audience=audience,
-        paper_type="",
         generated=datetime.now(timezone.utc).isoformat(),
         model=OPENROUTER_MODEL,
         findings_discovered=0,
@@ -230,27 +216,26 @@ def run_paper_eval(
     paper_ref: str,
     *,
     workspace_dir: Path | None = None,
-    source_url: str = "",
     mailing_meta: dict | None = None,
     storage: StorageBackend | None = None,
     discovery_passes: int = 3,
 ) -> dict:
     """Evaluate one paper. Always writes an evaluation.json, even on analysis failure.
 
-    Does **not** run conversion: ``paper.md`` and ``meta.json`` must already exist
-    (``paperlint convert``). On missing artifacts, raises ``FileNotFoundError``.
+    Does **not** run conversion: ``paper.md`` and metadata must already exist
+    (``paperflow convert``). On missing artifacts, raises ``FileNotFoundError``.
 
-    mailing_meta is the authoritative metadata from open-std.org's mailing index;
-    it must be supplied by the caller (cmd_eval / cmd_run resolve it via
-    fetch_papers_for_mailing).
+    ``mailing_meta`` is the authoritative metadata from open-std.org's mailing index
+    and must be supplied by the caller.
     """
     paper_id = paper_ref.strip().upper()
     if mailing_meta is None:
         raise ValueError(
             "run_paper_eval requires mailing_meta (authoritative from open-std.org). "
-            "Callers must resolve the paper through fetch_papers_for_mailing."
+            "Callers must resolve the paper through fetch_papers_for_year."
         )
 
+    source_url = mailing_meta.get("url", "")
     backend = _resolve_storage(workspace_dir, storage)
     wdir = Path(workspace_dir) if workspace_dir is not None else None
     configure_paperlint_file_logging_if_needed(wdir)
@@ -304,12 +289,11 @@ def run_paper_eval(
             file=sys.stderr,
         )
         _log.exception("ANALYSIS FAILED: %s", paper_id, exc_info=True)
-        evaluation = _base_evaluation(source_url, paper_id, mailing_meta)
+        evaluation = _base_evaluation(paper_id, mailing_meta)
         evaluation.pipeline_status = "partial"
         evaluation.title = meta.title
         evaluation.authors = meta.authors
         evaluation.audience = meta.target_group
-        evaluation.paper_type = meta.paper_type
         evaluation.summary = "This paper could not be fully evaluated due to an analysis issue."
         _apply_eval_failure(evaluation, "analysis", e)
         eval_json = to_dict(evaluation)
@@ -366,7 +350,6 @@ def run_paper_eval(
         title=meta.title,
         authors=meta.authors,
         audience=meta.target_group,
-        paper_type=meta.paper_type,
         generated=meta.run_timestamp,
         model=meta.model,
         findings_discovered=raw_discovered,

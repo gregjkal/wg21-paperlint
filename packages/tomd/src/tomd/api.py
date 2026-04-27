@@ -26,8 +26,6 @@ import re
 import sys
 from pathlib import Path
 
-from paperstore.backend import StorageBackend
-
 from tomd.lib.html import convert_html
 from tomd.lib.pdf import convert_pdf
 
@@ -46,9 +44,9 @@ _FALLBACK_KEY_MAP = {
     "title": "title",
     "paper_id": "document",
     "document_date": "date",
-    "subgroup": "audience",
+    "subgroup": "audience",       # mailing row key
+    "target_group": "audience",   # DB row key (SqliteBackend)
     "authors": "reply-to",
-    "paper_type": "paper-type",
 }
 
 _FRONT_MATTER_RE = re.compile(
@@ -139,29 +137,42 @@ def _convert_with_tomd(path: Path) -> tuple[str, list[str] | None]:
     return convert_html(path)
 
 
+_INTENT_LINE_RE = re.compile(r"^intent\s*:\s*(\S+)", re.MULTILINE)
+
+
+def _extract_intent_from_front_matter(md: str) -> str:
+    """Return the ``intent`` value from the markdown YAML front matter, or ``""``."""
+    front_matter_match = _FRONT_MATTER_RE.match(md)
+    if not front_matter_match:
+        return ""
+    body = front_matter_match.group("body")
+    intent_match = _INTENT_LINE_RE.search(body)
+    if not intent_match:
+        return ""
+    return intent_match.group(1).strip().strip('"\'')
+
+
 def convert_paper(
     paper_id: str,
-    store: StorageBackend,
+    source_path: Path,
+    meta: dict,
     *,
     write_prompts: bool = True,
-) -> Path:
-    """Convert the staged source for ``paper_id`` to markdown.
+) -> tuple[Path, str]:
+    """Convert a staged source file to markdown. No database access.
 
-    Reads the source path and metadata from ``store``, converts via the
-    suffix-dispatched tomd pipeline, injects missing YAML fields from the
-    metadata row, strips table-of-contents blocks, and writes the markdown
-    back through the store. When the converter flagged uncertain regions,
-    a ``<pid>.prompts.json`` intermediate is written with a JSON array of
-    self-contained LLM reconcile prompts. Returns the path of the written
-    markdown.
+    All inputs are pre-fetched by the caller. Writes the markdown and
+    optional prompts file directly to disk (same directory as source_path).
+    The caller is responsible for recording the returned path in the database.
+
+    Returns ``(md_path, extracted_intent)`` where ``extracted_intent`` is the
+    ``intent`` value from the paper's YAML front matter (``""`` if absent).
 
     Raises:
-        paperstore.MissingSourceError: no staged source for ``paper_id``.
-        paperstore.MissingMetaError: no mailing-index row or meta.json.
         RuntimeError: tomd produced no usable markdown.
     """
-    meta = store.get_meta(paper_id)
-    source_path = store.get_source_path(paper_id)
+    workspace_dir = source_path.parent
+    pid_lower = paper_id.strip().upper().lower()
 
     md, prompts = _convert_with_tomd(source_path)
 
@@ -180,8 +191,28 @@ def convert_paper(
     md = _apply_metadata_fallback(md, meta)
     md = _strip_toc(md)
 
-    md_path = store.write_paper_md(paper_id, md)
-    if write_prompts and prompts:
-        store.write_intermediate(paper_id, "prompts", prompts)
+    # Atomic write: temp → rename
+    import os, time as _time
+    final_path = workspace_dir / f"{pid_lower}.md"
+    temp_path = final_path.with_stem(final_path.stem + ".tmp")
+    if temp_path.exists():
+        temp_path.unlink()
+    temp_path.write_text(md, encoding="utf-8")
+    for _ in range(10):
+        try:
+            os.replace(temp_path, final_path)
+            break
+        except PermissionError:
+            _time.sleep(0.1)
+    else:
+        os.replace(temp_path, final_path)
 
-    return md_path
+    if write_prompts and prompts:
+        prompts_path = workspace_dir / f"{pid_lower}.prompts.json"
+        import json as _json
+        prompts_path.write_text(
+            _json.dumps(prompts, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    extracted_intent = _extract_intent_from_front_matter(md)
+    return final_path, extracted_intent

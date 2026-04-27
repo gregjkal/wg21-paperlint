@@ -24,7 +24,7 @@ from paperstore import StorageBackend
 from paperstore.errors import MissingSourceError
 
 from mailing.download import download_paper as _default_download_paper
-from mailing.scrape import fetch_papers_for_mailing as _default_fetch
+from mailing.scrape import fetch_papers_for_year as _default_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,9 @@ def stage_mailing(
             except MissingSourceError:
                 pass
 
-        do_download(pid, store, source_url=url)
+        path = do_download(pid, store.workspace_dir, source_url=url)
+        if path is not None:
+            store._patch_fields(pid.upper(), {"source_file": str(path)})
         counts["downloaded"] += 1
 
     return counts

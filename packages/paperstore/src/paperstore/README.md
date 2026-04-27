@@ -32,10 +32,22 @@ from paperstore import (
 
 Backend methods (see `StorageBackend` for the ABC):
 
-- writes: `write_paper_md`, `write_meta_json`, `write_evaluation_json`, `write_intermediate`, `upsert_mailing_index`, `put_source`
+- writes: `write_paper_md`, `write_meta_json`, `patch_meta`, `write_evaluation_json`, `write_intermediate`, `upsert_mailing_index`, `put_source`
 - reads: `get_meta`, `get_source_path`, `get_paper_md`, `get_evaluation`, `list_mailing`, `list_paper_ids`
 
+`patch_meta(paper_id, fields)` merges `fields` shallowly into the existing meta record and writes back atomically. Use it when only one or two fields need updating without clobbering the rest (e.g. tomd writing `intent` after converting).
+
 `from_uri(uri, *, workspace_dir=None)` resolves `None`/`file://...` to a `JsonBackend`. Other schemes (e.g. `postgres://`) are reserved for future backends.
+
+## Production backend
+
+In production (`wg21-website`), the backend is Postgres + S3:
+
+- **Postgres** holds structured metadata: paper_id, title, authors, intent, audience, findings, eval status, and all other scalar fields.
+- **S3** holds blobs: PDF/HTML source files, converted markdown (`<pid>.md`), eval JSON, and intermediates.
+- `get_source_path` materializes the S3 object to a local temp file before returning, per the `StorageBackend` ABC contract. Callers always receive a local `Path`.
+
+The `JsonBackend` and the Postgres + S3 backend share the same `StorageBackend` ABC; call sites are identical.
 
 ## CLI
 

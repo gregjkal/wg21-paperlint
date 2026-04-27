@@ -2,7 +2,22 @@
 
 ## What this is
 
-The LLM defect-finding pipeline for WG21 papers. `paperlint.orchestrator.run_paper_eval` is the per-paper entry point; the per-step logic is in `paperlint.pipeline`. Storage and conversion live elsewhere (paperstore, mailing, tomd).
+The LLM defect-finding pipeline for WG21 papers. `paperlint.orchestrator.run_paper_eval` is the per-paper entry point; the per-step logic is in `paperlint.steps`. Storage and conversion live elsewhere (paperstore, mailing, tomd).
+
+## Module layout
+
+```
+__main__.py     Click group entry point; `paperflow` bare is an alias for `paperflow full`
+full.py         `full` subcommand - end-to-end: download + convert + eval
+mailing.py      `mailing` subcommand - fetch mailing indexes from open-std.org
+download.py     `download` subcommand - download paper source only
+convert.py      `convert` subcommand - convert downloaded source to paper.md + meta.json
+eval.py         `eval` subcommand - LLM evaluation
+steps.py        LLM pipeline steps: step_discovery, step_verify_quotes, step_gate, step_summary_writer
+orchestrator.py Per-paper entry points: run_paper_eval, convert_one_paper
+```
+
+One command, one module. Do not add command logic to `__main__.py` directly; add a new module and register it as a subcommand there.
 
 ## Pipeline order
 
@@ -24,7 +39,7 @@ load_converted_paper            # <pid>.md + <pid>.meta.json via backend.get_pap
 
 ## Invariants
 
-- **`convert` and `eval`/`run` never share work.** `run_paper_eval` reads the paper markdown and metadata via the backend (`get_paper_md` / `get_meta`); it does not refetch or re-tomd. If you find yourself adding a fetch to the eval path, reconsider.
+- **`convert` and `eval`/`run` never share work.** `run_paper_eval` (in `orchestrator.py`) reads the paper markdown and metadata via the backend (`get_paper_md` / `get_meta`); it does not refetch or re-tomd. If you find yourself adding a fetch to the eval path, reconsider.
 - **Quotes are verifiable until proven otherwise.** `step_verify_quotes` does literal-substring then whitespace-normalized matching against the paper markdown. Findings with any unverifiable evidence are dropped *before* the gate sees them.
 - **Gate `judgment=true` is rewritten to REJECT.** This is intentional precision tuning per the rubric's "mechanically verifiable" framing. Don't relax it without a discussion.
 - **Always write the evaluation, even on failure.** Analysis-stage exceptions are caught; the orchestrator writes a `pipeline_status="partial"` skeleton with `failure_stage` / `failure_type` / `failure_message` to `<pid>.eval.json`. `PAPERLINT_ERROR_TRACEBACK=1` adds `failure_traceback`. Missing paper markdown or metadata is a different path: `FileNotFoundError` (re-raised from `MissingPaperMdError` / `MissingMetaError`), no file is written.

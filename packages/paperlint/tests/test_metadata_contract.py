@@ -1,83 +1,57 @@
 """Tests for the index-authoritative metadata contract.
 
 Covers:
-- _classify_arg: argument type detection for the paperflow CLI.
-- _infer_paper_type: the deterministic paper_type rules derived from the mailing index.
+- _validate_targets: target type validation for the paperflow CLI.
+- _infer_intent: title-prefix detection for the mailing scraper.
 
 These are pure-function tests; no network, no LLM, no filesystem.
 """
 
 import pytest
 
-from paperlint.__main__ import _classify_arg, _EVAL_REF_RE
-from mailing.scrape import _infer_paper_type
+from paperlint.jobs import _validate_targets
+from mailing.scrape import _infer_intent
 
 
-class TestClassifyArg:
-    def test_eval_ref_canonical(self):
-        assert _classify_arg("2026-02/P3642R4") == "eval_ref"
-        m = _EVAL_REF_RE.match("2026-02/P3642R4")
-        assert m.group("mailing") == "2026-02"
-        assert m.group("paper") == "P3642R4"
+class TestValidateTargets:
+    def test_all(self):
+        assert _validate_targets(["all"]) == "all"
 
-    def test_eval_ref_lowercase(self):
-        m = _EVAL_REF_RE.match("2026-02/p3642r4")
-        assert m.group("paper") == "p3642r4"
+    def test_years(self):
+        assert _validate_targets(["2026"]) == "years"
+        assert _validate_targets(["2025", "2026"]) == "years"
 
-    def test_eval_ref_n_paper(self):
-        assert _classify_arg("2026-02/N5035") == "eval_ref"
+    def test_papers(self):
+        assert _validate_targets(["P3642R4"]) == "papers"
+        assert _validate_targets(["P3642R4", "P3700R0"]) == "papers"
 
-    def test_eval_ref_sd_paper(self):
-        assert _classify_arg("2026-02/SD-4") == "eval_ref"
+    def test_mixing_raises(self):
+        with pytest.raises(ValueError, match="mix"):
+            _validate_targets(["2026", "P3642R4"])
 
-    def test_bare_paper_id_accepted(self):
-        assert _classify_arg("P3642R4") == "paper"
-
-    def test_local_path_rejected(self):
+    def test_empty_raises(self):
         with pytest.raises(ValueError):
-            _classify_arg("/tmp/paper.pdf")
-
-    def test_relative_path_rejected(self):
-        with pytest.raises(ValueError):
-            _classify_arg("./some/paper.pdf")
-
-    def test_year_slash_paper_not_eval_ref(self):
-        with pytest.raises(ValueError):
-            _classify_arg("26-02/P3642R4")
+            _validate_targets([])
 
 
-class TestInferPaperType:
-    def test_info_prefix_wins(self):
-        assert _infer_paper_type("Info: Some Informational Topic", "P3999R0") == "informational"
+class TestInferIntent:
+    def test_info_prefix_returns_info(self):
+        assert _infer_intent("Info: Some Informational Topic") == "info"
 
-    def test_ask_prefix_maps_to_proposal(self):
-        assert _infer_paper_type("Ask: Should we do X?", "P3999R0") == "proposal"
+    def test_ask_prefix_returns_ask(self):
+        assert _infer_intent("Ask: Should we do X?") == "ask"
 
-    def test_white_paper_pattern(self):
-        t = "ISO/IEC JTC1/SC22/WG21 White Paper, Extensions to C++ for Transactional Memory"
-        assert _infer_paper_type(t, "N5036") == "white-paper"
+    def test_neutral_title_returns_none(self):
+        assert _infer_intent("Carry-less product: std::clmul") is None
 
-    def test_n_paper_default_informational(self):
-        assert _infer_paper_type("2026-03 WG21 admin telecon meeting", "N5035") == "informational"
+    def test_empty_title_returns_none(self):
+        assert _infer_intent("") is None
 
-    def test_sd_default_standing_document(self):
-        assert _infer_paper_type("WG21 Practices and Procedures", "SD-4") == "standing-document"
+    def test_info_prefix_requires_exact_case(self):
+        assert _infer_intent("info: lowercase") is None
 
-    def test_p_paper_default_proposal(self):
-        assert _infer_paper_type("Carry-less product: std::clmul", "P3642R4") == "proposal"
+    def test_ask_prefix_requires_exact_case(self):
+        assert _infer_intent("ask: lowercase") is None
 
-    def test_unknown_prefix_defaults_proposal(self):
-        # Silence is authoritative — default to proposal.
-        assert _infer_paper_type("Some Title", "Q999") == "proposal"
-
-    def test_case_insensitive_paper_id(self):
-        assert _infer_paper_type("admin", "n5035") == "informational"
-        assert _infer_paper_type("title", "p3642r4") == "proposal"
-
-    def test_info_prefix_beats_paper_id_letter(self):
-        # Hypothetical: P-paper marked informational in the index.
-        assert _infer_paper_type("Info: Design update", "P3999R0") == "informational"
-
-    def test_white_paper_beats_n_default(self):
-        # N-paper with White Paper in title should be white-paper, not informational.
-        assert _infer_paper_type("WG21 White Paper on foo", "N5999") == "white-paper"
+    def test_info_not_mid_title(self):
+        assert _infer_intent("Some Info: thing") is None

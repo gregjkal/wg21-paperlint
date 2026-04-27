@@ -507,7 +507,6 @@ def step_summary_writer(client: openai.OpenAI, meta: PaperMeta, n_findings: int)
         f"Paper: {meta.paper} — {meta.title}\n"
         f"Authors: {', '.join(meta.authors)}\n"
         f"Audience: {meta.target_group}\n"
-        f"Type: {meta.paper_type}\n\n"
         f"Number of findings that passed verification: {n_findings}\n\n"
         f"Summarize what the evaluation found. Characterize the findings "
         f"at the level of categories and sections — do not list each one. "

@@ -2,7 +2,8 @@
 
 ## Spellings
 
-- **PaperLint** (prose), **paperlint** (package), **paperflow** (CLI, system, repo)
+- **PaperLint** (prose), **paperlint** (package), **paperflow** (CLI alias, system, repo)
+- `paperflow full` is the end-to-end command (download + convert + eval); `paperflow` bare is an alias for it
 - **tomd** (lowercase always), **WG21** (no space)
 
 ## Layout
@@ -12,7 +13,7 @@ packages/
   paperstore/   -> storage abstraction (JsonBackend)
   mailing/      -> scrape open-std.org + download paper sources
   tomd/         -> PDF/HTML to Markdown
-  paperlint/    -> LLM pipeline, hosts the `paperflow` CLI
+  paperlint/    -> LLM pipeline steps + CLI; `paperflow full` is the end-to-end command, `paperflow` is its alias
 tests/          -> cross-package integration test
 ```
 
@@ -21,14 +22,52 @@ Per-package rules: `packages/<name>/src/<name>/CLAUDE.md`. Consult those when wo
 ## CLI commands
 
 ```bash
-paperflow mailing [YEAR ...]     # fetch indexes from open-std.org (only internet command for indexes)
-paperflow convert P3642R4        # download source + convert to paper.md + meta.json (no LLM)
-paperflow convert 2026-04        # batch convert all papers in a mailing
-paperflow eval P3642R4           # LLM eval of one paper (needs OPENROUTER_API_KEY)
-paperflow run 2026-04            # LLM eval of all papers in a mailing
+# Index fetching (only command that hits the internet for metadata)
+paperflow mailing [YEAR ...]              # fetch mailing indexes from open-std.org
+
+# Per-stage commands - each accepts one or more paper ids OR a mailing id, not both
+paperflow download P3642R4 [P2900R15 ...]  # download paper source only
+paperflow convert P3642R4 [P2900R15 ...]   # convert downloaded source to paper.md + meta.json (no LLM)
+paperflow eval    P3642R4 [P2900R15 ...]   # LLM eval (needs OPENROUTER_API_KEY)
+
+# End-to-end command - requires paper to exist in local mailing metadata
+paperflow full    P3642R4 [P2900R15 ...]   # download + convert + eval in sequence
+paperflow         P3642R4 [P2900R15 ...]   # alias for `full`
+
+# Mailing-scoped variants (replace paper ids with a mailing id)
+paperflow download 2026-04
+paperflow convert  2026-04
+paperflow eval     2026-04
+paperflow full     2026-04
+paperflow          2026-04
+
+# Idempotent batch - skips papers already at or past the target stage
+paperflow download all
+paperflow convert  all
+paperflow eval     all
+paperflow full     all
+paperflow          all
 ```
 
-Bare paper ids resolve from local mailing indexes. Outside a venv, prefix with `uv run`. Workspace defaults to `$PAPERFLOW_WORKSPACE` or `./data`.
+**Argument rules:**
+- Paper ids and mailing ids cannot be mixed in the same invocation.
+- Multiple paper ids are accepted by all commands.
+- `all` processes every paper not already at the target stage (idempotent).
+- `full` / bare `paperflow` require the paper to be present in a local mailing index. Run `paperflow mailing` first.
+
+Each subcommand is implemented in its own module inside `packages/paperlint/src/paperlint/`:
+
+| Command | Module |
+|---|---|
+| `full` (end-to-end, entry-point alias) | `full.py` |
+| `mailing` | `mailing.py` |
+| `download` | `download.py` |
+| `convert` | `convert.py` |
+| `eval` | `eval.py` |
+
+The LLM pipeline steps (discovery, gate, summary) live in `steps.py`. The Click group entry point is `__main__.py`.
+
+Outside a venv, prefix with `uv run`. Workspace defaults to `$PAPERFLOW_WORKSPACE` or `./data`.
 
 ## On-disk layout
 

@@ -31,35 +31,22 @@ _PAPER_LINK_PATTERN = re.compile(
 )
 
 
-def _infer_paper_type(title: str, paper_id: str) -> str:
-    """Derive paper_type from mailing-index signals alone. No paper-content inspection.
+def _infer_intent(title: str) -> str | None:
+    """Derive intent from the paper title prefix, if present.
 
-    Rules, applied in order. First match wins:
-    - title contains "White Paper" → "white-paper"
-    - title starts with "Info:" → "informational"
-    - title starts with "Ask:" → "proposal"
-    - paper_id starts with "n" (N-paper) → "informational"
-    - paper_id starts with "sd" → "standing-document"
-    - paper_id starts with "p" (P-paper) → "proposal"
-    - otherwise → "proposal" (the authoritative silence default)
+    The WG21 document editor enforces two title conventions:
+    - ``"Info: ..."`` — informational paper → ``"info"``
+    - ``"Ask: ..."`` — paper requesting a poll/vote → ``"ask"``
+
+    Returns ``None`` when neither prefix is present; callers omit the
+    ``intent`` key from the row in that case.
     """
     title_s = title.strip()
-    title_lower = title_s.lower()
-    pid = paper_id.strip().lower()
-
-    if "white paper" in title_lower:
-        return "white-paper"
     if title_s.startswith("Info:"):
-        return "informational"
+        return "info"
     if title_s.startswith("Ask:"):
-        return "proposal"
-    if pid.startswith("n"):
-        return "informational"
-    if pid.startswith("sd"):
-        return "standing-document"
-    if pid.startswith("p"):
-        return "proposal"
-    return "proposal"
+        return "ask"
+    return None
 
 
 def _extract_paper_metadata_from_row(
@@ -130,7 +117,7 @@ def _extract_paper_metadata_from_row(
         file_ext = match.group(2).lower()
         filename = match.group(0).lower()
 
-        return {
+        row: dict = {
             "url": paper_url,
             "filename": filename,
             "type": file_ext,
@@ -139,10 +126,13 @@ def _extract_paper_metadata_from_row(
             "authors": authors,
             "document_date": document_date,
             "subgroup": subgroup,
-            "paper_type": _infer_paper_type(title, paper_id),
             "raw_columns": raw_columns,
             "raw_links": raw_links,
         }
+        intent = _infer_intent(title)
+        if intent is not None:
+            row["intent"] = intent
+        return row
 
     return None
 
@@ -203,7 +193,8 @@ def parse_papers_for_mailing(
     """Parse papers for a single mailing from a year index HTML page.
 
     Returns list of dicts with: paper_id, url, filename, type, title,
-    authors, document_date, subgroup, paper_type, raw_columns, raw_links.
+    authors, document_date, subgroup, raw_columns, raw_links, and optionally
+    intent (``"info"`` or ``"ask"`` when the title carries the prefix).
     """
     soup = BeautifulSoup(html, "html.parser")
     anchor_id = f"mailing{mailing_date}"
@@ -313,26 +304,34 @@ def fetch_all_mailings_for_year(
     return parse_all_mailings(html, page_url)
 
 
-def fetch_papers_for_mailing(
-    mailing_id: str,
+def fetch_papers_for_year(
+    year: str,
     *,
     timeout: float = 60.0,
 ) -> list[dict]:
-    """Fetch paper metadata for a single mailing from open-std.org.
+    """Fetch all paper metadata for a given year from open-std.org.
 
-    Fetches the entire year page and returns only the requested mailing's
-    papers. Prefer :func:`fetch_all_mailings_for_year` when you want all
-    mailings for a year.
+    Fetches the year index page once and merges all monthly mailings into a
+    single flat list. Papers are de-duplicated by ``paper_id``; the last
+    mailing in the year wins for a given paper ID (most recent revision).
+
+    Returns an empty list if the year page cannot be fetched.
     """
-    year = mailing_id.split("-")[0]
     all_mailings = fetch_all_mailings_for_year(year, timeout=timeout)
-    papers = all_mailings.get(mailing_id, [])
-    if not papers:
-        logger.warning("Mailing %s not found on year page for %s.", mailing_id, year)
-    return papers
+    if not all_mailings:
+        logger.warning("No mailings found on year page for %s.", year)
+        return []
+    # Merge monthly mailings; later months overwrite earlier ones for same paper_id.
+    seen: dict[str, dict] = {}
+    for _mailing_id, papers in sorted(all_mailings.items()):
+        for paper in papers:
+            pid = paper.get("paper_id", "")
+            if pid:
+                seen[pid] = paper
+    return list(seen.values())
 
 
-def fetch_mailing_paper_ids(mailing_id: str) -> list[str]:
-    """Fetch just the paper IDs for a mailing."""
-    papers = fetch_papers_for_mailing(mailing_id)
+def fetch_paper_ids_for_year(year: str) -> list[str]:
+    """Fetch just the paper IDs for a year."""
+    papers = fetch_papers_for_year(year)
     return [p["paper_id"] for p in papers]

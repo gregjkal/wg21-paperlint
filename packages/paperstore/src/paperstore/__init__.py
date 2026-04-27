@@ -24,7 +24,7 @@ from paperstore.errors import (
     MissingSourceError,
     PaperstoreError,
 )
-from paperstore.json_backend import JsonBackend
+from paperstore.sqlite_backend import SqliteBackend
 
 WORKSPACE_ENV_VAR = "PAPERFLOW_WORKSPACE"
 
@@ -43,7 +43,7 @@ def from_uri(
 ) -> StorageBackend:
     """Construct a storage backend from a URI.
 
-    - ``None`` or ``"file://<path>"`` returns a :class:`JsonBackend`.
+    - ``None`` or ``"file://<path>"`` returns a :class:`SqliteBackend`.
     - Any other scheme is reserved for future backends (e.g. ``postgres://``).
     """
     if uri is None or uri == "":
@@ -52,7 +52,7 @@ def from_uri(
                 "paperstore.from_uri requires workspace_dir when uri is None or empty "
                 f"(got uri={uri!r}, workspace_dir=None)."
             )
-        return JsonBackend(workspace_dir)
+        return SqliteBackend(workspace_dir)
     if uri.startswith("file://"):
         path = uri[len("file://"):] or workspace_dir
         if path is None:
@@ -60,7 +60,7 @@ def from_uri(
                 f"paperstore.from_uri: file:// URI has no path and no workspace_dir "
                 f"fallback (uri={uri!r})."
             )
-        return JsonBackend(path)
+        return SqliteBackend(path)
     raise ValueError(
         f"paperstore.from_uri: unsupported URI scheme (uri={uri!r}); "
         "only None, '', and file:// are recognized."
@@ -69,7 +69,7 @@ def from_uri(
 
 __all__ = [
     "StorageBackend",
-    "JsonBackend",
+    "SqliteBackend",
     "PaperstoreError",
     "MissingPaperError",
     "MissingMetaError",

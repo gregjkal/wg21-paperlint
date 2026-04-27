@@ -7,172 +7,90 @@
 # Official repository: https://github.com/cppalliance/paperlint
 #
 
-"""Mailing CLI: scrape an open-std.org mailing index and stage paper sources.
+"""Mailing CLI: scrape open-std.org mailing indexes (index only, no downloads).
 
 Workspace dir defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``; pass
-``--workspace-dir`` to override per command.
+``--workspace-dir`` to override.
 
 Usage::
 
-    mailing 2026-04                          # index + all sources (idempotent)
-    mailing 2026-04 --index-only             # index only, no downloads
-    mailing 2026-04 --refetch                # re-download every source
-    mailing 2026-04/P3642R4                  # one paper (still idempotent)
-    mailing 2026-04 --paper P3642R4 -p P3700R0
+    mailing                          # show usage
+    mailing all                      # scrape all years >= 2011
+    mailing 2026                     # scrape all mailings for 2026
+    mailing 2025 2026                # scrape multiple years
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
-from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
-from paperstore.errors import MissingSourceError
+from paperstore import WORKSPACE_ENV_VAR, SqliteBackend, default_workspace_dir
 
-from mailing.batch import stage_mailing
-from mailing.download import download_paper
-from mailing.scrape import fetch_papers_for_mailing
+from mailing.scrape import discover_years, fetch_all_mailings_for_year, fetch_papers_for_year
 
-_REF_RE = re.compile(
-    r"^(?P<mailing>\d{4}-\d{2})(?:/(?P<paper>[A-Za-z][A-Za-z0-9\-]*))?$"
-)
+_EARLIEST_YEAR = 2011
 
 
-def _stage_one_paper(
-    mailing_id: str,
-    paper_id: str,
-    store: JsonBackend,
-    *,
-    refetch: bool,
-) -> int:
-    """Download a single paper's source. Idempotent unless ``refetch``."""
-    papers = fetch_papers_for_mailing(mailing_id)
-    if not papers:
-        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
-        return 1
-    merged = store.upsert_mailing_index(mailing_id, papers)
-
-    row = next(
-        (p for p in merged if p["paper_id"].lower() == paper_id.lower()), None
-    )
-    if row is None:
-        print(
-            f"Error: {paper_id} not found in mailing {mailing_id}.",
-            file=sys.stderr,
-        )
-        return 1
-
-    source_url = row.get("url") or ""
-    if not source_url:
-        print(f"Error: {paper_id} has no url in the mailing row.", file=sys.stderr)
-        return 1
-
-    if not refetch:
-        try:
-            existing = store.get_source_path(paper_id)
-            print(f"Already staged: {paper_id} at {existing}")
-            return 0
-        except MissingSourceError:
-            pass
-
-    path = download_paper(paper_id, store, source_url=source_url)
-    print(f"Staged {paper_id} at {path}")
-    return 0
+def _scrape_year(year: str, store: SqliteBackend) -> int:
+    """Scrape all mailings for ``year`` and upsert into the store. Returns paper count."""
+    all_mailings = fetch_all_mailings_for_year(year)
+    if not all_mailings:
+        print(f"  {year}: no mailings found")
+        return 0
+    total = 0
+    for mailing_id, papers in sorted(all_mailings.items()):
+        merged = store.upsert_mailing_index(mailing_id, papers)
+        total += len(merged)
+    print(f"  {year}: {total} papers across {len(all_mailings)} mailing(s)")
+    return total
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mailing",
-        description="Scrape a WG21 mailing and stage paper sources (idempotent).",
+        description="Scrape WG21 mailing indexes from open-std.org (index only).",
     )
     parser.add_argument(
-        "reference",
-        help="Mailing id (e.g. 2026-04) or <mailing-id>/<paper-id>.",
+        "targets",
+        nargs="*",
+        metavar="YEAR_OR_ALL",
+        help='Year(s) to scrape (e.g. 2026), or "all" for all years >= 2011.',
     )
     parser.add_argument(
         "--workspace-dir",
         default=default_workspace_dir(),
         metavar="DIR",
         type=Path,
-        help=f"Paperstore JSON backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
-    )
-    parser.add_argument(
-        "--index-only",
-        action="store_true",
-        help="Write the mailing index only; do not download any sources.",
-    )
-    parser.add_argument(
-        "--refetch",
-        action="store_true",
-        help="Re-download every source, even if already staged.",
-    )
-    parser.add_argument(
-        "-p", "--paper",
-        action="append",
-        default=[],
-        metavar="PAPER_ID",
-        help="Restrict to these paper ids (repeatable). Mailing-only ref.",
-    )
-    parser.add_argument(
-        "--papers",
-        default=None,
-        metavar="IDS",
-        help="Comma-separated paper-id filter (mailing-only ref).",
+        help=f"Paperstore backend root (default: ${WORKSPACE_ENV_VAR} or ./data).",
     )
     args = parser.parse_args()
 
-    m = _REF_RE.match(args.reference.strip())
-    if not m:
-        print(
-            f"Error: reference must be <mailing-id> or <mailing-id>/<paper-id>, got {args.reference!r}",
-            file=sys.stderr,
-        )
-        return 2
-    mailing_id = m.group("mailing")
-    paper_id = m.group("paper")
-
-    if paper_id is not None and (args.index_only or args.paper or args.papers):
-        print(
-            "Error: --index-only / --paper / --papers are only valid for the mailing-only form.",
-            file=sys.stderr,
-        )
-        return 2
-
-    store = JsonBackend(args.workspace_dir)
-
-    if paper_id is not None:
-        return _stage_one_paper(mailing_id, paper_id, store, refetch=args.refetch)
-
-    if args.index_only:
-        papers = fetch_papers_for_mailing(mailing_id)
-        if not papers:
-            print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
-            return 1
-        store.upsert_mailing_index(mailing_id, papers)
+    if not args.targets:
+        parser.print_help()
         return 0
 
-    filter_set: set[str] | None = None
-    if args.paper or args.papers:
-        ids: list[str] = list(args.paper)
-        if args.papers:
-            ids.extend(p for p in args.papers.split(",") if p.strip())
-        filter_set = {p.strip().upper() for p in ids if p.strip()}
+    store = SqliteBackend(args.workspace_dir)
 
-    counts = stage_mailing(
-        mailing_id, store, refetch=args.refetch, papers=filter_set
-    )
-    if counts["papers_in_index"] == 0:
-        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
-        return 1
+    if args.targets == ["all"]:
+        print("Discovering available years from open-std.org...")
+        years = [y for y in discover_years() if int(y) >= _EARLIEST_YEAR]
+        if not years:
+            print("No years found.", file=sys.stderr)
+            return 1
+        print(f"Found {len(years)} years ({years[0]}-{years[-1]})")
+        total = sum(_scrape_year(y, store) for y in years)
+        print(f"\nDone: {total} total papers")
+        return 0
 
-    print(
-        f"Mailing {mailing_id}: {counts['papers_in_index']} papers in index, "
-        f"{counts['downloaded']} downloaded, {counts['skipped']} already staged, "
-        f"{counts['no_url']} without url, {counts['filtered_out']} filtered out."
-    )
-    print(f"Workspace: {store.workspace_dir}")
+    total = 0
+    for target in args.targets:
+        if not target.isdigit() or len(target) != 4:
+            print(f"Error: expected a 4-digit year, got {target!r}", file=sys.stderr)
+            return 2
+        total += _scrape_year(target, store)
+    print(f"\nDone: {total} total papers")
     return 0
 
 

@@ -10,9 +10,9 @@
 """Abstract storage interface for paperflow artifacts.
 
 All reads and writes done by the mailing, tomd, and paperlint packages go
-through a :class:`StorageBackend` instance. Only :class:`paperstore.JsonBackend`
-is implemented today; the ABC exists so a future Postgres backend (or an
-in-memory test double) can drop in without touching call sites.
+through a :class:`StorageBackend` instance. :class:`SqliteBackend` is the
+production implementation; an in-memory test double can drop in without
+touching call sites.
 
 Non-local backends must materialize bytes to a temp file inside
 :meth:`StorageBackend.get_source_path` so callers can always treat the return
@@ -27,15 +27,54 @@ from typing import Any
 
 
 class StorageBackend(ABC):
-    # ---- writes (unchanged from the pre-paperstore storage.py) ----------
+
+    # ---- year-based mailing index -----------------------------------------
 
     @abstractmethod
-    def write_paper_md(self, paper_id: str, markdown: str) -> Any:
-        """Persist the converted markdown for a paper."""
+    def has_year(self, year: str) -> bool:
+        """Return True if at least one paper row exists for ``year``."""
+
+    @abstractmethod
+    def upsert_year(self, year: str, papers: list[dict]) -> list[dict]:
+        """Insert or update all ``papers`` for ``year``. Returns merged list."""
+
+    @abstractmethod
+    def list_papers_for_year(self, year: str) -> list[dict]:
+        """Return all paper rows for ``year``.
+
+        Raises:
+            paperstore.MissingMailingIndexError: no papers for that year.
+        """
+
+    @abstractmethod
+    def list_all_paper_ids(self) -> list[str]:
+        """Return all known paper IDs (uppercase). Order is unspecified."""
+
+    @abstractmethod
+    def resolve_year_for_paper(self, paper_id: str) -> tuple[str, dict] | None:
+        """Find ``paper_id`` across all stored papers.
+
+        Returns ``(year, paper_row)`` on success, ``None`` if not found.
+        The match is case-insensitive.
+        """
+
+    # ---- writes -----------------------------------------------------------
+
+    @abstractmethod
+    def put_source(self, paper_id: str, content: bytes, *, suffix: str) -> Path:
+        """Stage raw source bytes for ``paper_id``. Atomic write.
+
+        ``suffix`` must start with a dot (``.pdf``, ``.html``). Returns the
+        local path. Updates ``source_file`` in the store.
+        """
+
+    @abstractmethod
+    def write_paper_md(self, paper_id: str, markdown: str) -> Path:
+        """Persist the converted markdown. Atomic write. Returns path."""
 
     @abstractmethod
     def write_meta_json(self, paper_id: str, meta: dict) -> Any:
-        """Persist per-paper metadata (mirrors ``PaperMeta.asdict()``)."""
+        """Persist per-paper metadata (upsert)."""
 
     @abstractmethod
     def write_evaluation_json(self, paper_id: str, evaluation: dict) -> Any:
@@ -45,35 +84,14 @@ class StorageBackend(ABC):
     def write_intermediate(self, paper_id: str, name: str, payload: Any) -> Any:
         """Persist a labeled intermediate artifact (e.g. ``1-findings``)."""
 
-    @abstractmethod
-    def upsert_mailing_index(
-        self, mailing_id: str, papers: list[dict]
-    ) -> list[dict]:
-        """Idempotent merge. Preserves ``added`` timestamps on known papers."""
-
-    @abstractmethod
-    def put_source(
-        self, paper_id: str, content: bytes, *, suffix: str
-    ) -> Path:
-        """Stage raw downloaded source bytes for ``paper_id``.
-
-        ``suffix`` should start with a dot (``.pdf``, ``.html``). Returns a
-        local filesystem path pointing at the stored bytes. Identical bytes
-        are a no-op; differing bytes overwrite.
-        """
-
-    # ---- reads ----------------------------------------------------------
+    # ---- reads ------------------------------------------------------------
 
     @abstractmethod
     def get_meta(self, paper_id: str) -> dict:
-        """Return per-paper metadata.
-
-        Falls back to the row in the mailing index when a dedicated
-        ``meta.json`` has not been written yet (tomd runs *after* mailing
-        but *before* meta.json exists).
+        """Return per-paper metadata as a dict.
 
         Raises:
-            paperstore.MissingMetaError: no meta row anywhere.
+            paperstore.MissingMetaError: no metadata for ``paper_id``.
         """
 
     @abstractmethod
@@ -81,7 +99,7 @@ class StorageBackend(ABC):
         """Return a local path to the staged source file.
 
         Raises:
-            paperstore.MissingSourceError: no source has been staged.
+            paperstore.MissingSourceError: source not staged.
         """
 
     @abstractmethod
@@ -89,7 +107,7 @@ class StorageBackend(ABC):
         """Return the converted markdown as a string.
 
         Raises:
-            paperstore.MissingPaperMdError: no markdown has been written.
+            paperstore.MissingPaperMdError: markdown not written.
         """
 
     @abstractmethod
@@ -97,31 +115,34 @@ class StorageBackend(ABC):
         """Return the per-paper evaluation deliverable.
 
         Raises:
-            paperstore.MissingEvaluationError: no evaluation has been written.
+            paperstore.MissingEvaluationError: evaluation not written.
         """
 
-    @abstractmethod
+    # ---- legacy aliases (JsonBackend compat; removed in SqliteBackend) ----
+
+    def upsert_mailing_index(
+        self, mailing_id: str, papers: list[dict]
+    ) -> list[dict]:
+        """Deprecated: use upsert_year."""
+        year = mailing_id.split("-")[0] if "-" in mailing_id else mailing_id
+        return self.upsert_year(year, papers)
+
     def list_mailing(self, mailing_id: str) -> list[dict]:
-        """Return the persisted mailing index rows.
+        """Deprecated: use list_papers_for_year."""
+        year = mailing_id.split("-")[0] if "-" in mailing_id else mailing_id
+        return self.list_papers_for_year(year)
 
-        Raises:
-            paperstore.MissingMailingIndexError: the mailing has never been
-                upserted into this store.
-        """
-
-    @abstractmethod
     def resolve_mailing_for_paper(self, paper_id: str) -> tuple[str, dict] | None:
-        """Find the mailing containing ``paper_id``.
+        """Deprecated: use resolve_year_for_paper."""
+        return self.resolve_year_for_paper(paper_id)
 
-        Scans persisted mailing indexes for a row whose ``paper_id`` matches
-        (case-insensitive). Returns ``(mailing_id, paper_row)`` on the first
-        match, or ``None`` if no mailing contains the paper. The ``paper_row``
-        dict includes the ``url`` field needed for download.
-        """
-
-    @abstractmethod
     def list_paper_ids(self) -> list[str]:
-        """Return paper ids for which any artifact (source, md, meta, eval) exists.
+        """Deprecated: use list_all_paper_ids."""
+        return self.list_all_paper_ids()
 
-        The returned ids are uppercase. Order is unspecified.
-        """
+    def patch_meta(self, paper_id: str, fields: dict) -> None:
+        """Deprecated: internal implementation detail. Use specific write methods."""
+        raise NotImplementedError(
+            "patch_meta is not part of the public API. "
+            "Use write_meta_json or specific update methods."
+        )

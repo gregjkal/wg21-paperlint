@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from paperlint.models import Evidence, Finding, PaperMeta
-from paperlint.pipeline import step_discovery
+from paperlint.steps import step_discovery
 
 
 def _find(n: int) -> Finding:
@@ -34,7 +34,6 @@ def test_step_discovery_pass_fails_later_pass_can_succeed(passes: int) -> None:
         title="T",
         authors=[],
         target_group="G",
-        paper_type="E",
         source_file="f",
         run_timestamp="2020-01-01T00:00:00+00:00",
         model="m",
@@ -48,7 +47,7 @@ def test_step_discovery_pass_fails_later_pass_can_succeed(passes: int) -> None:
             raise RuntimeError("transient")
         return [_find(1)]
 
-    with patch("paperlint.pipeline._run_discovery_call", side_effect=fake_run):
+    with patch("paperlint.steps._run_discovery_call", side_effect=fake_run):
         out = step_discovery(client, "text", meta, passes=passes)
     assert len(out) == 1
     assert out[0].title == "t"
@@ -61,14 +60,13 @@ def test_step_discovery_all_passes_fail_raises() -> None:
         title="T",
         authors=[],
         target_group="G",
-        paper_type="E",
         source_file="f",
         run_timestamp="2020-01-01T00:00:00+00:00",
         model="m",
     )
     with (
         patch(
-            "paperlint.pipeline._run_discovery_call",
+            "paperlint.steps._run_discovery_call",
             side_effect=RuntimeError("all bad"),
         ),
         pytest.raises(RuntimeError, match="all bad"),

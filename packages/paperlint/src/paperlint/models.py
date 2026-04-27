@@ -9,12 +9,16 @@
 
 """Core data models for paperlint.
 
-The discovery/gate side (``Evidence``, ``Finding``, ``GatedFinding``, ``PaperMeta``)
+The discovery/gate side (``Evidence``, ``Finding``, ``GatedFinding``)
 and the deliverable side (``Evaluation`` with ``OutputFinding`` / ``Reference``,
 ``MailingIndex`` with ``RoomEntry`` / ``IndexPaperEntry`` / ``FailureEntry``)
-together describe every JSON contract in ``paperlint/docs/design.md``. Use
-:func:`to_dict` when serializing so unset optional fields are omitted rather
-than rendered as ``null``, preserving the existing on-the-wire behavior.
+together describe every JSON contract in ``DESIGN.md`` (repo root).
+
+``Paper`` is the canonical in-memory representation of a row in the ``papers``
+table. ``ConvertResult`` is the output of a single tomd conversion pass.
+
+Use :func:`to_dict` when serializing so unset optional fields are omitted
+rather than rendered as ``null``.
 """
 
 from dataclasses import asdict, dataclass, field
@@ -56,62 +60,80 @@ class PaperMeta:
     title: str
     authors: list[str]
     target_group: str
-    paper_type: str
     source_file: str
     run_timestamp: str
     model: str
+    intent: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict) -> "PaperMeta":
+        authors = raw.get("authors") or []
+        if isinstance(authors, str):
+            import json as _json
+            try:
+                authors = _json.loads(authors)
+            except Exception:
+                authors = [a.strip() for a in authors.split(",") if a.strip()]
         return cls(
-            paper=raw["paper"],
-            title=raw["title"],
-            authors=list(raw["authors"]),
-            target_group=raw["target_group"],
-            paper_type=raw["paper_type"],
-            source_file=raw["source_file"],
-            run_timestamp=raw["run_timestamp"],
-            model=raw["model"],
+            paper=raw.get("paper") or raw.get("paper_id") or "",
+            title=raw.get("title") or "",
+            authors=list(authors),
+            target_group=raw.get("target_group") or raw.get("subgroup") or "",
+            source_file=raw.get("source_file") or "",
+            run_timestamp=raw.get("run_timestamp") or "",
+            model=raw.get("model") or "",
+            intent=raw.get("intent") or "",
         )
 
 
 @dataclass
 class Paper:
-    """Canonical in-memory representation of a WG21 paper (design.md §4).
+    """Canonical in-memory representation of a WG21 paper.
 
-    Declared here to match the spec's signature. Populating all fields
-    requires plumbing that does not exist yet: ``mailing_date`` and
-    ``publication_date`` are not scraped or extracted today, and
-    ``meta_source`` is not tracked in :mod:`paperlint.extract`. Wiring
-    :class:`Paper` through ``mailing.py`` / ``extract.py`` /
-    ``orchestrator.py`` and migrating :class:`PaperMeta` consumers is
-    follow-up work; :class:`PaperMeta` remains the write-side model for
-    ``meta.json`` so the on-disk wire format is unchanged by this
-    declaration.
+    Maps to a row in the ``papers`` SQLite table. Used as the input type
+    passed to conversion and evaluation workers; workers never access
+    the storage backend directly.
 
-    Field semantics (from design.md §4):
+    Field semantics:
 
-    * ``audience`` — short names with no hyphens (``["LEWG", "SG14"]``).
-      Section 5 notes "the tag normalization formula is Will's to define";
-      no normalizer is provided here.
-    * ``intent`` — ``"ask" | "info"``. The mapping from the open-std
-      ``paper_type`` values (``proposal`` / ``informational`` /
-      ``white-paper`` / ``standing-document``) is not specified in §4 and
-      is left to the caller.
-    * ``meta_source`` — ``"mailing"`` / ``"tomd"`` / ``"merged"`` provenance
-      tag set by whichever component last resolved the metadata.
+    * ``year`` — 4-digit year string (``"2026"``). Mailings are bucketed
+      by year only; the monthly mailing granularity is not exposed.
+    * ``audience`` — target subgroup name (``"LEWG"``, ``"SG16"``).
+    * ``intent`` — ``"ask"`` | ``"info"`` | ``""`` (unknown). Derived from
+      the mailing title prefix (``"Ask:"`` / ``"Info:"``), confirmed or
+      overridden by the paper's own YAML front matter after tomd conversion.
+    * ``source_file`` — local filesystem path to the staged PDF or HTML.
+      Empty string means not yet downloaded.
+    * ``markdown_path`` — local filesystem path to the converted ``.md``.
+      Empty string means not yet converted.
     """
     document_id: str
-    mailing_id: str
+    year: str
     title: str
     authors: list[str]
     mailing_date: str
-    publication_date: str
-    audience: list[str]
+    document_date: str
+    audience: str
     intent: str
     url: str
-    markdown: str
-    meta_source: str
+    source_file: str
+    markdown_path: str
+
+
+@dataclass
+class ConvertResult:
+    """Output of a single tomd conversion pass for one paper.
+
+    Returned by :func:`paperlint.orchestrator.convert_one_paper`. The main
+    coroutine writes the fields back to the database; the worker itself
+    never touches the storage backend.
+    """
+    paper_id: str
+    markdown_path: str
+    intent: str
+    title: str
+    status: str         # "ok" | "error"
+    error: str = ""
 
 
 @dataclass
@@ -164,7 +186,6 @@ class Evaluation:
     title: str
     authors: list[str]
     audience: str
-    paper_type: str
     generated: str
     model: str
     findings_discovered: int
@@ -217,7 +238,7 @@ class MailingIndex:
     schema_version: str
     paperlint_sha: str
     prompt_hash: str
-    mailing_id: str
+    year: str
     generated: str
     total_papers: int
     succeeded: int

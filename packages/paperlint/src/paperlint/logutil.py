@@ -12,11 +12,9 @@ Two handlers live here:
 * ``configure_paperlint_console_logging`` attaches a stderr ``StreamHandler``
   whose level is driven by the CLI ``-v`` count (0=WARNING, 1=INFO, 2+=DEBUG).
   This is the normal path for terminal usage.
-* ``configure_paperlint_file_logging_if_needed`` is a legacy escape hatch kept
+* ``configure_paperlint_file_logging_if_needed`` adds an optional file handler
   for callers that want to capture a structured log to disk, driven by the
-  ``PAPERLINT_LOG_FILE`` / ``PAPERLINT_LOG_TO_WORKSPACE`` env vars. It is not
-  the primary UX; the console handler is. Left in place because it's cheap and
-  already documented; revisit if nobody uses it.
+  ``PAPERLINT_LOG_FILE`` / ``PAPERLINT_LOG_TO_WORKSPACE`` env vars.
 """
 
 from __future__ import annotations

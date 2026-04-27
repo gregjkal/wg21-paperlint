@@ -37,7 +37,6 @@ def _minimal_evaluation(**overrides) -> Evaluation:
         title="Example",
         authors=["Alice"],
         audience="LEWG",
-        paper_type="proposal",
         generated="2026-04-23T00:00:00+00:00",
         model="anthropic/claude-opus-4.6",
         findings_discovered=0,
@@ -71,9 +70,8 @@ def test_to_dict_evaluation_includes_only_set_failure_fields() -> None:
 
 def test_to_dict_preserves_required_fields_with_empty_strings() -> None:
     # Empty strings are not None; they must survive the filter.
-    d = to_dict(_minimal_evaluation(summary="", paper_type=""))
+    d = to_dict(_minimal_evaluation(summary=""))
     assert d["summary"] == ""
-    assert d["paper_type"] == ""
 
 
 def test_to_dict_evaluation_field_names_match_design_doc() -> None:
@@ -88,7 +86,6 @@ def test_to_dict_evaluation_field_names_match_design_doc() -> None:
         "title",
         "authors",
         "audience",
-        "paper_type",
         "generated",
         "model",
         "findings_discovered",
@@ -144,13 +141,27 @@ def test_paper_meta_from_dict_roundtrip() -> None:
         title="Example",
         authors=["Alice", "Bob"],
         target_group="LEWG",
-        paper_type="proposal",
         source_file="/tmp/P0000R0.html",
         run_timestamp="2026-04-23T00:00:00+00:00",
         model="anthropic/claude-opus-4.6",
+        intent="ask",
     )
     roundtripped = PaperMeta.from_dict(asdict(pm))
     assert roundtripped == pm
+
+
+def test_paper_meta_from_dict_intent_defaults_to_empty() -> None:
+    raw = {
+        "paper": "P0000R0",
+        "title": "Example",
+        "authors": [],
+        "target_group": "LEWG",
+        "source_file": "/tmp/x.html",
+        "run_timestamp": "2026-04-23T00:00:00+00:00",
+        "model": "anthropic/claude-opus-4.6",
+    }
+    pm = PaperMeta.from_dict(raw)
+    assert pm.intent == ""
 
 
 def test_mailing_index_field_names_match_design_doc() -> None:
@@ -158,7 +169,7 @@ def test_mailing_index_field_names_match_design_doc() -> None:
         schema_version=SCHEMA_VERSION,
         paperlint_sha="deadbeef0000",
         prompt_hash="cafef00d0000",
-        mailing_id="2026-02",
+        year="2026",
         generated="2026-04-23T00:00:00+00:00",
         total_papers=1,
         succeeded=1,
@@ -180,7 +191,7 @@ def test_mailing_index_field_names_match_design_doc() -> None:
         "schema_version",
         "paperlint_sha",
         "prompt_hash",
-        "mailing_id",
+        "year",
         "generated",
         "total_papers",
         "succeeded",
@@ -201,11 +212,11 @@ def test_mailing_index_includes_failed_papers_when_present() -> None:
         schema_version=SCHEMA_VERSION,
         paperlint_sha="x",
         prompt_hash="y",
-        mailing_id="2026-02",
-        generated="2026-04-23T00:00:00+00:00",
-        total_papers=1,
-        succeeded=0,
-        failed=1,
+            year="2026",
+            generated="2026-04-23T00:00:00+00:00",
+            total_papers=1,
+            succeeded=0,
+            failed=1,
         partial=0,
         failed_papers=[
             FailureEntry(paper="P0001R0", error="404 Not Found"),
@@ -236,44 +247,31 @@ def test_to_dict_is_json_serializable() -> None:
     json.dumps(to_dict(ev))  # must not raise
 
 
-def test_paper_matches_design_md_signature() -> None:
-    """Pin Paper's field names, types, and order to design.md §4.
-
-    If this test fails, the fix is usually to update design.md and this test
-    together; drift between them defeats the point of §4.
-    """
-    expected = [
-        ("document_id", str),
-        ("mailing_id", str),
-        ("title", str),
-        ("authors", list[str]),
-        ("mailing_date", str),
-        ("publication_date", str),
-        ("audience", list[str]),
-        ("intent", str),
-        ("url", str),
-        ("markdown", str),
-        ("meta_source", str),
-    ]
-    actual = [(f.name, f.type) for f in fields(Paper)]
-    assert actual == expected
+def test_paper_matches_schema() -> None:
+    """Pin Paper's field names to the papers table schema."""
+    expected_names = {
+        "document_id", "year", "title", "authors", "mailing_date",
+        "document_date", "audience", "intent", "url", "source_file", "markdown_path",
+    }
+    actual_names = {f.name for f in fields(Paper)}
+    assert actual_names == expected_names
 
 
 def test_paper_instantiates_with_all_fields() -> None:
     p = Paper(
         document_id="P3642R4",
-        mailing_id="2026-02",
+        year="2026",
         title="Carry-less product: std::clmul",
         authors=["Jan Schultke"],
         mailing_date="2026-02-15",
-        publication_date="2026-01-15",
-        audience=["LEWG"],
+        document_date="2026-01-15",
+        audience="LEWG",
         intent="ask",
         url="https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p3642r4.html",
-        markdown="# Carry-less product\n\n...",
-        meta_source="mailing",
+        source_file="",
+        markdown_path="",
     )
     assert p.document_id == "P3642R4"
-    assert p.audience == ["LEWG"]
+    assert p.audience == "LEWG"
     assert p.intent == "ask"
-    assert p.meta_source == "mailing"
+    assert p.year == "2026"

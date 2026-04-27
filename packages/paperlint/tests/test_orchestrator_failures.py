@@ -4,31 +4,40 @@
 # Distributed under the Boost Software License, Version 1.0.
 #
 
-"""Tests for failed pipeline paths: structured fields in ``evaluation.json`` and index ``failed_papers``."""
+"""Tests for failed pipeline paths: structured failure fields in evaluation output."""
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from paperlint import __main__ as paperlint_main
 from paperlint.models import PaperMeta
 from paperlint.orchestrator import run_paper_eval
+from paperstore import SqliteBackend
 
 
-def _write_converted(
+def _seed_converted(
     tmp_path: Path, paper_id: str, meta: PaperMeta, body: str = "paper body"
-) -> None:
-    stem = paper_id.lower()
-    (tmp_path / f"{stem}.md").write_text(body, encoding="utf-8")
-    (tmp_path / f"{stem}.meta.json").write_text(
-        json.dumps(asdict(meta), ensure_ascii=False),
-        encoding="utf-8",
-    )
+) -> SqliteBackend:
+    """Seed a SqliteBackend so load_converted_paper can find the artifacts."""
+    store = SqliteBackend(tmp_path)
+    store.upsert_year("2026", [{"paper_id": paper_id, "title": meta.title}])
+    # write_meta_json first (INSERT OR REPLACE), then write_paper_md to set markdown_path
+    store.write_meta_json(paper_id, {
+        "paper": paper_id,
+        "title": meta.title,
+        "authors": meta.authors,
+        "target_group": meta.target_group,
+        "source_file": meta.source_file,
+        "run_timestamp": meta.run_timestamp,
+        "model": meta.model,
+        "intent": meta.intent,
+        "year": "2026",
+    })
+    store.write_paper_md(paper_id, body)
+    return store
 
 
 def test_run_paper_eval_missing_artifacts_raises(tmp_path: Path) -> None:
@@ -36,6 +45,7 @@ def test_run_paper_eval_missing_artifacts_raises(tmp_path: Path) -> None:
         "title": "T",
         "authors": ["A"],
         "subgroup": "G",
+        "url": "",
     }
     with (
         patch("paperlint.orchestrator.ensure_api_keys"),
@@ -45,7 +55,6 @@ def test_run_paper_eval_missing_artifacts_raises(tmp_path: Path) -> None:
         run_paper_eval(
             "N1234R0",
             workspace_dir=tmp_path,
-            source_url="https://example.com/n1234r0.html",
             mailing_meta=mailing,
         )
 
@@ -58,12 +67,11 @@ def test_run_paper_eval_analysis_failure_writes_failure_fields(
         title="Title",
         authors=["A"],
         target_group="LEWG",
-        paper_type="E",
         source_file="f",
         run_timestamp="2026-01-01T00:00:00+00:00",
         model="m",
     )
-    _write_converted(tmp_path, "N1234R0", meta)
+    store = _seed_converted(tmp_path, "N1234R0", meta)
     monkeypatch.delenv("PAPERLINT_ERROR_TRACEBACK", raising=False)
     with (
         patch("paperlint.orchestrator.step_discovery", side_effect=RuntimeError("LLM timeout")),
@@ -72,9 +80,8 @@ def test_run_paper_eval_analysis_failure_writes_failure_fields(
     ):
         out = run_paper_eval(
             "N1234R0",
-            workspace_dir=tmp_path,
-            source_url="https://example.com/n1234r0.html",
-            mailing_meta={"title": "T", "authors": ["A"], "subgroup": "G"},
+            storage=store,
+            mailing_meta={"title": "T", "authors": ["A"], "subgroup": "G", "url": ""},
         )
     assert out.get("pipeline_status") == "partial"
     assert out.get("failure_stage") == "analysis"
@@ -89,12 +96,11 @@ def test_run_paper_eval_includes_traceback_in_json_when_env_set(
         title="Title",
         authors=[],
         target_group="G",
-        paper_type="E",
         source_file="f",
         run_timestamp="2026-01-01T00:00:00+00:00",
         model="m",
     )
-    _write_converted(tmp_path, "N1234R0", meta)
+    store = _seed_converted(tmp_path, "N1234R0", meta)
     monkeypatch.setenv("PAPERLINT_ERROR_TRACEBACK", "1")
     with (
         patch("paperlint.orchestrator.step_discovery", side_effect=RuntimeError("e")),
@@ -103,28 +109,8 @@ def test_run_paper_eval_includes_traceback_in_json_when_env_set(
     ):
         out = run_paper_eval(
             "N1234R0",
-            workspace_dir=tmp_path,
-            source_url="u",
-            mailing_meta={"title": "T", "authors": [], "subgroup": "G"},
+            storage=store,
+            mailing_meta={"title": "T", "authors": [], "subgroup": "G", "url": ""},
         )
     assert "failure_traceback" in out
     assert "RuntimeError" in out["failure_traceback"]
-
-
-def test_failure_entry_includes_new_fields() -> None:
-    r = {
-        "paper": "P1R0",
-        "status": "ok",
-        "result": {
-            "paper": "P1R0",
-            "pipeline_status": "partial",
-            "summary": "S",
-            "failure_stage": "analysis",
-            "failure_type": "OSError",
-            "failure_message": "disk",
-        },
-    }
-    e = paperlint_main._failure_entry(r)
-    assert e.failure_message == "disk"
-    assert e.failure_stage == "analysis"
-    assert e.failure_type == "OSError"
