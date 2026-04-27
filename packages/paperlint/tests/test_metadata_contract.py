@@ -1,7 +1,7 @@
 """Tests for the index-authoritative metadata contract.
 
 Covers:
-- _parse_eval_ref: the new <mailing-id>/<paper-id> CLI contract and its rejections.
+- _classify_arg: argument type detection for the paperflow CLI.
 - _infer_paper_type: the deterministic paper_type rules derived from the mailing index.
 
 These are pure-function tests; no network, no LLM, no filesystem.
@@ -9,48 +9,41 @@ These are pure-function tests; no network, no LLM, no filesystem.
 
 import pytest
 
-from paperlint.__main__ import _EVAL_CONTRACT_MSG, _parse_eval_ref
+from paperlint.__main__ import _classify_arg, _EVAL_REF_RE
 from mailing.scrape import _infer_paper_type
 
 
-class TestParseEvalRef:
-    def test_accepts_canonical(self):
-        assert _parse_eval_ref("2026-02/P3642R4") == ("2026-02", "P3642R4")
+class TestClassifyArg:
+    def test_eval_ref_canonical(self):
+        assert _classify_arg("2026-02/P3642R4") == "eval_ref"
+        m = _EVAL_REF_RE.match("2026-02/P3642R4")
+        assert m.group("mailing") == "2026-02"
+        assert m.group("paper") == "P3642R4"
 
-    def test_uppercases_paper_id(self):
-        assert _parse_eval_ref("2026-02/p3642r4") == ("2026-02", "P3642R4")
+    def test_eval_ref_lowercase(self):
+        m = _EVAL_REF_RE.match("2026-02/p3642r4")
+        assert m.group("paper") == "p3642r4"
 
-    def test_accepts_n_paper(self):
-        assert _parse_eval_ref("2026-02/N5035") == ("2026-02", "N5035")
+    def test_eval_ref_n_paper(self):
+        assert _classify_arg("2026-02/N5035") == "eval_ref"
 
-    def test_accepts_sd_paper(self):
-        assert _parse_eval_ref("2026-02/SD-4") == ("2026-02", "SD-4")
+    def test_eval_ref_sd_paper(self):
+        assert _classify_arg("2026-02/SD-4") == "eval_ref"
 
-    def test_rejects_bare_paper_id(self):
-        with pytest.raises(ValueError) as exc:
-            _parse_eval_ref("P3642R4")
-        assert _EVAL_CONTRACT_MSG in str(exc.value)
+    def test_bare_paper_id_accepted(self):
+        assert _classify_arg("P3642R4") == "paper"
 
-    def test_rejects_local_path(self):
+    def test_local_path_rejected(self):
         with pytest.raises(ValueError):
-            _parse_eval_ref("/tmp/paper.pdf")
+            _classify_arg("/tmp/paper.pdf")
 
-    def test_rejects_relative_path(self):
+    def test_relative_path_rejected(self):
         with pytest.raises(ValueError):
-            _parse_eval_ref("./some/paper.pdf")
+            _classify_arg("./some/paper.pdf")
 
-    def test_rejects_missing_paper(self):
+    def test_year_slash_paper_not_eval_ref(self):
         with pytest.raises(ValueError):
-            _parse_eval_ref("2026-02/")
-
-    def test_rejects_wrong_mailing_format(self):
-        with pytest.raises(ValueError):
-            _parse_eval_ref("2026/P3642R4")  # missing month
-        with pytest.raises(ValueError):
-            _parse_eval_ref("26-02/P3642R4")  # 2-digit year
-
-    def test_whitespace_tolerated(self):
-        assert _parse_eval_ref("  2026-02/P3642R4  ") == ("2026-02", "P3642R4")
+            _classify_arg("26-02/P3642R4")
 
 
 class TestInferPaperType:

@@ -13,14 +13,20 @@ from __future__ import annotations
 
 from mailing.download import download_paper
 from mailing.scrape import (
+    discover_years,
+    fetch_all_mailings_for_year,
     fetch_mailing_paper_ids,
     fetch_papers_for_mailing,
+    parse_all_mailings,
     parse_papers_for_mailing,
 )
 
 __all__ = [
+    "discover_years",
     "download_paper",
+    "fetch_all_mailings_for_year",
     "fetch_mailing_paper_ids",
     "fetch_papers_for_mailing",
+    "parse_all_mailings",
     "parse_papers_for_mailing",
 ]

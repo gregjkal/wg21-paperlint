@@ -44,8 +44,8 @@ The pre-0.2 file-path interface (`tomd input.pdf`) was removed.
 ### QA mode
 
 Score conversion quality across a batch of papers without inspecting each
-output by hand. QA reads the `paper.md` files already written by a
-previous `tomd` run, so convert first, then score:
+output by hand. QA reads the markdown already written by a previous
+`tomd` run (via `paperstore.get_paper_md`), so convert first, then score:
 
 ```
 tomd 2026-04                                        # convert the corpus
@@ -55,21 +55,24 @@ tomd 2026-04 --qa --workers 16                      # parallel (16 processes)
 tomd 2026-04 --qa --workers 16 --timeout 180        # abort stragglers after 3m
 ```
 
-Each `paper.md` is parsed with mistune and scored on heading structure,
+Each paper's markdown is parsed with mistune and scored on heading structure,
 code block detection, front-matter completeness, uncertain regions, and
 unfenced code. The score is 0-100. Papers that haven't been converted yet
 are skipped with a pointer to run convert first.
 
 ### Output
 
-- `paper.md` is always produced. It contains YAML front matter (title,
+In a paperstore-backed workspace, tomd produces:
+
+- `<pid>.md` - always produced on success. Contains YAML front matter (title,
   document number, date, audience, reply-to) followed by the paper body
   rendered as Markdown.
-- `paper.prompts.md` is produced only when the converter found uncertain
-  regions. It pairs each uncertain span with both extraction paths (MuPDF
-  and spatial) plus surrounding context, formatted for manual LLM
-  reconciliation. If no uncertain regions exist, no prompts file is written
-  (and any stale one at the output path is removed).
+- `<pid>.prompts.json` - produced only when the converter found uncertain
+  regions. A JSON array; each element is a complete LLM prompt the operator
+  can paste into any LLM verbatim, pairing one uncertain span with both
+  extraction paths (MuPDF and spatial) plus surrounding context. If no
+  uncertain regions exist, no prompts file is written (and any stale one at
+  the output path is removed).
 
 ### Uncertain regions
 
@@ -81,9 +84,10 @@ marked with an HTML comment:
 <!-- tomd:uncertain:L120-L145 -->
 ```
 
-The accompanying `.prompts.md` file contains ready-to-feed LLM prompts for
-each marker. You resolve uncertain regions manually; the LLM fixes
-structure, never content.
+The accompanying `<pid>.prompts.json` file contains ready-to-feed LLM
+prompts (one per marker, plus one per flagged wording-detection issue).
+You resolve uncertain regions manually; the LLM fixes structure, never
+content.
 
 ## Limitations
 
@@ -93,15 +97,13 @@ structure, never content.
 - **HTML generator coverage.** Five generators are detected directly:
   mpark/wg21, Bikeshed, HackMD, wg21 cow-tool, and hand-written. Other
   sources fall back to a generic extractor that may miss metadata fields.
-- **LLM auto-resolution is deferred to v2.** The `.prompts.md` file is
-  produced; feeding it to an LLM and applying the result is manual in this
-  release.
-- **Slide decks are detected and skipped.** Presentation-style PDFs
-  (landscape pages smaller than standard paper) produce an empty `.md`
-  and a `.prompts.md` noting the slide-deck detection.
-- **Standards drafts (>= 200 pages) are detected and skipped.** These are
-  C++ standard documents, not technical papers. They produce an empty `.md`
-  and a `.prompts.md` noting the detection.
+- **LLM auto-resolution is deferred to v2.** The `<pid>.prompts.json` file
+  is produced; feeding each prompt to an LLM and applying the result is
+  manual in this release.
+- **Slide decks and standards drafts are detected and skipped.**
+  Presentation-style PDFs (landscape pages smaller than standard paper) and
+  long C++ standard documents (>= 200 pages) raise so the orchestrator can
+  surface a partial-status evaluation rather than producing empty markdown.
 
 ## Design
 

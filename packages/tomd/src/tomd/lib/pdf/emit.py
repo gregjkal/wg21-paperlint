@@ -340,25 +340,19 @@ def emit_markdown(metadata: dict, sections: list[Section]) -> str:
     return md
 
 
-def emit_prompts(sections: list[Section]) -> str | None:
-    """Generate the companion prompts file for uncertain regions.
+def emit_prompts(sections: list[Section]) -> list[str] | None:
+    """Generate self-contained LLM reconcile prompts for uncertain regions.
 
-    Returns None if there are no uncertain regions.
+    Each returned element is a complete prompt the operator can paste into
+    any LLM verbatim. Returns ``None`` when there are no uncertain regions.
     """
     uncertain = [(idx, s) for idx, s in enumerate(sections)
                  if s.kind == SectionKind.UNCERTAIN]
     if not uncertain:
         return None
 
-    parts: list[str] = []
-    parts.append("# tomd - LLM Reconciliation Prompts")
-    parts.append("")
-    parts.append("Each section below contains text extracted from a PDF using two")
-    parts.append("independent methods that produced different results. Reconcile")
-    parts.append("each into clean Markdown.")
-    parts.append("")
-
-    for i, (idx, sec) in enumerate(uncertain):
+    prompts: list[str] = []
+    for idx, sec in uncertain:
         ctx_before = ""
         ctx_after = ""
         if idx > 0 and sections[idx - 1].kind != SectionKind.UNCERTAIN:
@@ -366,14 +360,21 @@ def emit_prompts(sections: list[Section]) -> str | None:
         if idx + 1 < len(sections) and sections[idx + 1].kind != SectionKind.UNCERTAIN:
             ctx_after = sections[idx + 1].text[:200].strip()
 
-        parts.append(f"## Region {i + 1} (page {sec.page_num})")
+        parts: list[str] = []
+        parts.append(
+            "You are reconciling text extracted from a PDF using two independent "
+            "methods that produced different results. Reconcile them into clean "
+            "Markdown."
+        )
         parts.append("")
-        parts.append("The following section was extracted from a PDF using two independent methods")
-        parts.append("that produced different results. Reconcile them into clean Markdown.")
+        parts.append(
+            "CRITICAL: Keep ALL data verbatim. Do not summarize, omit, or paraphrase "
+            "any text. Every word from the source must appear in your output. You are "
+            "only fixing structure (paragraphs, headings, lists, formatting) - never "
+            "content."
+        )
         parts.append("")
-        parts.append("CRITICAL: Keep ALL data verbatim. Do not summarize, omit, or paraphrase any")
-        parts.append("text. Every word from the source must appear in your output. You are only")
-        parts.append("fixing structure (paragraphs, headings, lists, formatting) - never content.")
+        parts.append(f"This region is on page {sec.page_num}.")
         parts.append("")
 
         if ctx_before:
@@ -390,11 +391,12 @@ def emit_prompts(sections: list[Section]) -> str | None:
         parts.append("```")
         parts.append(sec.spatial_text or sec.text)
         parts.append("```")
-        parts.append("")
 
         if ctx_after:
+            parts.append("")
             parts.append("Context (following confident section):")
             parts.append(f"> {ctx_after}")
-            parts.append("")
 
-    return "\n".join(parts)
+        prompts.append("\n".join(parts))
+
+    return prompts

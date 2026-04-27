@@ -71,13 +71,15 @@ def test_end_to_end_convert(json_store, monkeypatch):
         json_store,
         source_url="https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2026/p1112r4.pdf",
     )
-    md = convert_paper(paper_id, json_store)
+    md_path = convert_paper(paper_id, json_store)
 
     workspace = json_store.workspace_dir
-    assert source_path == workspace / paper_id / "source.pdf"
+    stem = paper_id.lower()
+    assert source_path == workspace / f"{stem}.pdf"
     assert source_path.is_file()
     assert source_path.read_bytes() == pdf_bytes
 
-    assert (workspace / paper_id / "paper.md").is_file()
+    assert md_path == workspace / f"{stem}.md"
+    assert md_path.is_file()
+    assert md_path.read_text(encoding="utf-8").strip(), "convert_paper produced empty markdown"
     assert (workspace / "mailings" / f"{mailing_id}.json").is_file()
-    assert md.strip(), "convert_paper produced empty markdown"

@@ -182,12 +182,25 @@ def _dedupe_by_filename(papers: list[dict]) -> list[dict]:
     return unique
 
 
+def _parse_table_rows(table: Tag, page_url: str) -> list[dict]:
+    """Extract paper dicts from a single mailing table."""
+    paper_rows: list[dict] = []
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"])
+        if not cells or any(cell.get("colspan") for cell in cells):
+            continue
+        paper = _extract_paper_metadata_from_row(cells, page_url)
+        if paper:
+            paper_rows.append(paper)
+    return _dedupe_by_filename(paper_rows)
+
+
 def parse_papers_for_mailing(
     html: str,
     mailing_date: str,
     page_url: str,
 ) -> list[dict]:
-    """Parse papers for a mailing from a year index HTML page.
+    """Parse papers for a single mailing from a year index HTML page.
 
     Returns list of dicts with: paper_id, url, filename, type, title,
     authors, document_date, subgroup, paper_type, raw_columns, raw_links.
@@ -204,16 +217,100 @@ def parse_papers_for_mailing(
         logger.warning("No table found after anchor %s", anchor_id)
         return []
 
-    paper_rows: list[dict] = []
-    for row in table.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if not cells or any(cell.get("colspan") for cell in cells):
-            continue
-        paper = _extract_paper_metadata_from_row(cells, page_url)
-        if paper:
-            paper_rows.append(paper)
+    return _parse_table_rows(table, page_url)
 
-    return _dedupe_by_filename(paper_rows)
+
+def parse_all_mailings(
+    html: str,
+    page_url: str,
+) -> dict[str, list[dict]]:
+    """Parse ALL mailings from a year index HTML page.
+
+    Finds every mailing anchor on the page and parses its table.
+    Returns ``{"2026-01": [...], "2026-02": [...], ...}``.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    result: dict[str, list[dict]] = {}
+
+    for anchor in soup.find_all(id=_MAILING_ANCHOR_RE):
+        anchor_id = anchor.get("id") or ""
+        mailing_id = anchor_id.replace("mailing", "")
+        table = _find_table_in_section(anchor)
+        if not table:
+            logger.warning("No table found after anchor %s", anchor_id)
+            continue
+        papers = _parse_table_rows(table, page_url)
+        if papers:
+            result[mailing_id] = papers
+
+    for anchor in soup.find_all(attrs={"name": _MAILING_ANCHOR_RE}):
+        name = anchor.get("name") or ""
+        mailing_id = name.replace("mailing", "")
+        if mailing_id in result:
+            continue
+        table = _find_table_in_section(anchor)
+        if not table:
+            logger.warning("No table found after anchor %s", name)
+            continue
+        papers = _parse_table_rows(table, page_url)
+        if papers:
+            result[mailing_id] = papers
+
+    return result
+
+
+_YEAR_LINK_RE = re.compile(r"/papers/(\d{4})/?$")
+
+
+def _fetch_year_page(year: str, *, timeout: float = 60.0) -> tuple[str, str]:
+    """Fetch a year index page. Returns ``(html, page_url)``."""
+    url = f"{BASE_URL}/{year}/"
+    logger.info("Fetching year page %s from %s", year, url)
+    response = requests.get(
+        url,
+        timeout=timeout,
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+    )
+    response.raise_for_status()
+    return response.text, url
+
+
+def discover_years(*, timeout: float = 60.0) -> list[str]:
+    """Fetch the root papers index and return all available year strings, sorted."""
+    root_url = f"{BASE_URL}/"
+    logger.info("Discovering years from %s", root_url)
+    response = requests.get(
+        root_url,
+        timeout=timeout,
+        headers={"User-Agent": DEFAULT_USER_AGENT},
+    )
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    years: set[str] = set()
+    for link in soup.find_all("a", href=True):
+        m = _YEAR_LINK_RE.search(link["href"])
+        if m:
+            years.add(m.group(1))
+    return sorted(years)
+
+
+def fetch_all_mailings_for_year(
+    year: str,
+    *,
+    timeout: float = 60.0,
+) -> dict[str, list[dict]]:
+    """Fetch all mailings for a year from open-std.org.
+
+    One HTTP request. Returns ``{"2026-01": [...], "2026-02": [...], ...}``.
+    """
+    try:
+        html, page_url = _fetch_year_page(year, timeout=timeout)
+    except requests.RequestException:
+        logger.exception("Failed to fetch year page for %s.", year)
+        return {}
+
+    return parse_all_mailings(html, page_url)
 
 
 def fetch_papers_for_mailing(
@@ -221,30 +318,18 @@ def fetch_papers_for_mailing(
     *,
     timeout: float = 60.0,
 ) -> list[dict]:
-    """Fetch paper metadata for a mailing from open-std.org.
+    """Fetch paper metadata for a single mailing from open-std.org.
 
-    Args:
-        mailing_id: Mailing identifier, e.g. "2026-02"
-        timeout: HTTP request timeout in seconds
-
-    Returns:
-        List of paper dicts (see parse_papers_for_mailing for structure).
+    Fetches the entire year page and returns only the requested mailing's
+    papers. Prefer :func:`fetch_all_mailings_for_year` when you want all
+    mailings for a year.
     """
     year = mailing_id.split("-")[0]
-    url = f"{BASE_URL}/{year}/"
-    logger.info("Fetching mailing %s from %s", mailing_id, url)
-    try:
-        response = requests.get(
-            url,
-            timeout=timeout,
-            headers={"User-Agent": DEFAULT_USER_AGENT},
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        logger.exception("Failed to fetch year page for %s.", mailing_id)
-        return []
-
-    return parse_papers_for_mailing(response.text, mailing_id, url)
+    all_mailings = fetch_all_mailings_for_year(year, timeout=timeout)
+    papers = all_mailings.get(mailing_id, [])
+    if not papers:
+        logger.warning("Mailing %s not found on year page for %s.", mailing_id, year)
+    return papers
 
 
 def fetch_mailing_paper_ids(mailing_id: str) -> list[str]:

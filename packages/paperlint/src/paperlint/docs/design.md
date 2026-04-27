@@ -243,7 +243,7 @@ Step 3: SUMMARY WRITER (LLM)
   ▼
 Step 4: ASSEMBLY (compute, no model)
   Input: metadata + verified evidence + verdicts + suppression + summary string
-  Output: evaluation.json — single deliverable file per paper
+  Output: <pid>.eval.json — single deliverable file per paper
 ```
 
 ---
@@ -371,14 +371,17 @@ When any paper in the batch failed, `failed_papers` is also present: a list of e
 
 #### Intermediate artifacts (per-paper, for debugging)
 
+The JsonBackend is flat: every artifact for a paper is a sibling file in
+the workspace root, prefixed with the lowercase paper id.
+
 ```
-{workspace_dir}/{paper_id}/
-├── evaluation.json        # the deliverable
-├── meta.json              # Step 0: metadata (from mailing index)
-├── paper.md               # extracted text (char-offset ground truth)
-├── 1-findings.json        # Step 1: discovery findings with evidence
-├── 2-gate.json            # Step 2: verdicts
-└── 2c-suppressed.json     # Step 2c: suppressed PASS findings (audit)
+{workspace_dir}/
+├── {pid}.eval.json         # the deliverable
+├── {pid}.meta.json         # Step 0: metadata (from mailing index)
+├── {pid}.md                # extracted text (char-offset ground truth)
+├── {pid}.1-findings.json   # Step 1: discovery findings with evidence
+├── {pid}.2-gate.json       # Step 2: verdicts
+└── {pid}.2c-suppressed.json # Step 2c: suppressed PASS findings (audit)
 ```
 
 ---

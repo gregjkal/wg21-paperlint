@@ -24,7 +24,7 @@ Pipeline execution order:
 14. Merge table sections into position
 15. Structure: metadata extraction, heading/list/paragraph classification, position-based list detection, paragraph merging, code block detection, wording section detection, language label stripping, nesting validation
 16. TOC stripping (exact-match fast path + fuzzy match against headings)
-17. Emit .md + optional .prompts.md
+17. Emit markdown + optional `<pid>.prompts.json` (JSON array of self-contained LLM reconcile prompts)
 
 ## Multi-Signal Confidence (Critical)
 
@@ -76,7 +76,7 @@ When paths disagree: MuPDF version goes in the output (it's more battle-tested).
 The tool must never silently produce bad Markdown.
 
 - If a region is uncertain, emit the MuPDF version in the output marked with `<!-- tomd:uncertain:L{start}-L{end} -->`
-- The companion prompts file includes BOTH extraction versions, surrounding context, and all raw metadata
+- The companion prompts file is a JSON array; each element is a self-contained prompt that includes BOTH extraction versions, surrounding context, and the framing instructions
 - LLM prompts must require verbatim data preservation - the LLM fixes structure, never content
 - If no prompts file is needed (zero uncertain regions), don't write one.
 - High-confidence output should look like a human wrote the Markdown - proper heading nesting, unwrapped paragraph lines, correct list formatting, blank lines between blocks
@@ -98,12 +98,12 @@ The output Markdown must be clean and readable:
 
 ## LLM Integration (v2)
 
-Auto-resolution via `--llm` flag is deferred to v2. For v1, the tool produces a companion `.prompts.md` file that the user feeds to any LLM manually. The prompts file is plain Markdown - usable by any LLM, any interface.
+Auto-resolution via `--llm` flag is deferred to v2. For v1, the tool produces a companion `<pid>.prompts.json` file: a JSON array where each element is a complete LLM prompt the operator can paste into any LLM verbatim. One element per uncertain region (plus one per flagged wording-detection issue).
 
 ## File Map
 
 - `__main__.py` - CLI entry point. Argparse + paperstore-backed `convert_paper` invocation. Takes a paper id and a workspace dir; supports `--qa` mode with `--qa-json`, `--workers`, and `--timeout` flags for batch quality scoring. The pre-0.2 file-path interface (`tomd input.pdf`) is removed; sources must be staged via `mailing` first.
-- `api.py` - Public API. `convert_paper(paper_id, store, *, write_prompts=True)` reads the staged source + mailing-index row through paperstore, dispatches by suffix to `lib.pdf.convert_pdf` / `lib.html.convert_html`, applies YAML front-matter fallback from the mailing row, strips TOC blocks, writes `paper.md` (and an optional `<paper-id>.prompts` intermediate) back through the store, and returns the markdown.
+- `api.py` - Public API. `convert_paper(paper_id, store, *, write_prompts=True) -> Path` reads the staged source + mailing-index row through paperstore, dispatches by suffix to `lib.pdf.convert_pdf` / `lib.html.convert_html`, applies YAML front-matter fallback from the mailing row, strips TOC blocks, writes the markdown (and an optional `<pid>.prompts.json` intermediate, a JSON array of LLM reconcile prompts) back through the store, and returns the path of the written markdown.
 - `lib/__init__.py` - Shared text utilities and constants for PDF and HTML converters: `ascii_escape` (kept for external use, no longer called in pipeline), `strip_format_chars`, `format_front_matter`, `parse_author_lines`, `ALLOWED_LINK_SCHEMES`, shared regex patterns (`EMAIL_RE`, `DATE_RE`, `DOC_NUM_RE`, `SECTION_NUM_PREFIX_RE`), and their reusable shape strings (`DOC_NUM_PATTERN`, `SECTION_NUM_PATTERN`) consumed by `lib/pdf/types.py` to build `DOC_FIELD_RE` and `SECTION_NUM_RE`.
 - `lib/similarity.py` - Dual-algorithm string similarity (SequenceMatcher + Jaccard). Per-algorithm thresholds, 200-char circuit breaker. Format-agnostic.
 - `lib/toc.py` - Table of Contents detection. Primary path: exact-match set lookup against known headings (O(1) per section). Fuzzy fallback (SequenceMatcher + Jaccard) only when heading count is below `_MAX_FUZZY_HEADINGS` (200). Fallback structural-hints path for headingless wording-only papers. Bridges small gaps. Format-agnostic.

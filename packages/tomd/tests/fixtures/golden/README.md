@@ -28,18 +28,19 @@ From the `tomd/` directory, after intentionally changing HTML converter output:
 
 ```bash
 python -c "
+import json
 from pathlib import Path
-from lib.html import convert_html
+from tomd.lib.html import convert_html
 ROOT = Path('.').resolve()
 papers, out = ROOT / 'papers', ROOT / 'tests/fixtures/golden'
 for name in ['p3411r5.html', 'p2728r11.html', 'p3953r0.html', 'p4005r0.html',
              'p4020r0.html', 'p3911r2.html', 'n5034.html']:
     stem = Path(name).stem
-    md, pr = convert_html(papers / name)
+    md, prompts = convert_html(papers / name)
     (out / f'{stem}.golden.md').write_text(md, encoding='utf-8', newline='\n')
-    ppath = out / f'{stem}.golden.prompts.md'
-    if pr:
-        ppath.write_text(pr, encoding='utf-8', newline='\n')
+    ppath = out / f'{stem}.golden.prompts.json'
+    if prompts:
+        ppath.write_text(json.dumps(prompts, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
     elif ppath.exists():
         ppath.unlink()
 "
@@ -51,19 +52,21 @@ From the `tomd/` directory, after intentionally changing PDF converter output:
 
 ```bash
 python -c "
+import json
 from pathlib import Path
-from lib.pdf import convert_pdf
+from tomd.lib.pdf import convert_pdf
 out = Path('tests/fixtures/golden')
 for stem in ['p0533r9', 'p0957r8', 'p1068r11', 'p3556r0',
              'p1122r3', 'p2040r0', 'p3714r0', 'p1112r4']:
-    md, pr = convert_pdf(out / f'{stem}.pdf')
+    md, prompts = convert_pdf(out / f'{stem}.pdf')
     (out / f'{stem}.golden.md').write_text(md, encoding='utf-8', newline='\n')
-    ppath = out / f'{stem}.golden.prompts.md'
-    if pr:
-        ppath.write_text(pr, encoding='utf-8', newline='\n')
+    ppath = out / f'{stem}.golden.prompts.json'
+    if prompts:
+        ppath.write_text(json.dumps(prompts, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
     elif ppath.exists():
         ppath.unlink()
 "
 ```
 
-Review diffs, then commit.
+Prompts goldens are JSON arrays where each element is a self-contained LLM
+reconcile prompt. Review diffs, then commit.

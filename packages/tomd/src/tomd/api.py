@@ -11,8 +11,9 @@
 
 ``convert_paper(paper_id, store)`` is the only supported entry point.
 The converter looks up the source file and metadata in ``store`` (errors
-if either is absent), converts, then writes ``paper.md`` (and an optional
-``<paper-id>.prompts`` intermediate) back through the store.
+if either is absent), converts, then writes the paper's markdown (and an
+optional ``<pid>.prompts.json`` intermediate of LLM reconcile prompts)
+back through the store. Returns the path of the written markdown.
 
 YAML front-matter fallback lives here: whatever tomd could not extract
 from the source paper is filled in from the mailing-index row for the
@@ -128,7 +129,7 @@ def _apply_metadata_fallback(md: str, mailing_meta: dict | None) -> str:
     return md
 
 
-def _convert_with_tomd(path: Path) -> tuple[str, str | None]:
+def _convert_with_tomd(path: Path) -> tuple[str, list[str] | None]:
     """Dispatch to the appropriate tomd converter by file suffix."""
     suffix = path.suffix.lower()
     if suffix == ".pdf":
@@ -143,13 +144,16 @@ def convert_paper(
     store: StorageBackend,
     *,
     write_prompts: bool = True,
-) -> str:
+) -> Path:
     """Convert the staged source for ``paper_id`` to markdown.
 
     Reads the source path and metadata from ``store``, converts via the
     suffix-dispatched tomd pipeline, injects missing YAML fields from the
-    metadata row, strips table-of-contents blocks, and writes ``paper.md``
-    back through the store. Returns the markdown string.
+    metadata row, strips table-of-contents blocks, and writes the markdown
+    back through the store. When the converter flagged uncertain regions,
+    a ``<pid>.prompts.json`` intermediate is written with a JSON array of
+    self-contained LLM reconcile prompts. Returns the path of the written
+    markdown.
 
     Raises:
         paperstore.MissingSourceError: no staged source for ``paper_id``.
@@ -163,7 +167,7 @@ def convert_paper(
 
     if prompts:
         print(
-            f"tomd [{paper_id}] conversion issues:\n{prompts}",
+            f"tomd [{paper_id}] flagged {len(prompts)} uncertain region(s)",
             file=sys.stderr,
         )
 
@@ -176,8 +180,8 @@ def convert_paper(
     md = _apply_metadata_fallback(md, meta)
     md = _strip_toc(md)
 
-    store.write_paper_md(paper_id, md)
+    md_path = store.write_paper_md(paper_id, md)
     if write_prompts and prompts:
-        store.write_intermediate(paper_id, f"{paper_id.upper()}.prompts", prompts)
+        store.write_intermediate(paper_id, "prompts", prompts)
 
-    return md
+    return md_path

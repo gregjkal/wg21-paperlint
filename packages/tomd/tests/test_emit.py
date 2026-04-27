@@ -41,15 +41,34 @@ def test_emit_prompts_none_when_no_uncertain():
     assert emit_prompts([sec]) is None
 
 
-def test_emit_prompts_has_content():
-    sec = make_section("uncertain", kind=SectionKind.UNCERTAIN,
-                       confidence=Confidence.UNCERTAIN)
-    sec.mupdf_text = "mupdf version"
-    sec.spatial_text = "spatial version"
-    result = emit_prompts([sec])
-    assert result is not None
-    assert "MuPDF extraction" in result
-    assert "Spatial extraction" in result
+def test_emit_prompts_returns_one_self_contained_prompt_per_region():
+    sec_a = make_section(
+        "uncertain a", kind=SectionKind.UNCERTAIN, confidence=Confidence.UNCERTAIN
+    )
+    sec_a.mupdf_text = "mupdf a"
+    sec_a.spatial_text = "spatial a"
+    sec_a.page_num = 3
+    sec_b = make_section(
+        "uncertain b", kind=SectionKind.UNCERTAIN, confidence=Confidence.UNCERTAIN
+    )
+    sec_b.mupdf_text = "mupdf b"
+    sec_b.spatial_text = "spatial b"
+    sec_b.page_num = 7
+
+    result = emit_prompts([sec_a, sec_b])
+    assert isinstance(result, list)
+    assert len(result) == 2
+
+    for r in result:
+        assert "MuPDF extraction" in r
+        assert "Spatial extraction" in r
+        assert "CRITICAL" in r
+        assert "verbatim" in r
+
+    assert "page 3" in result[0]
+    assert "mupdf a" in result[0]
+    assert "page 7" in result[1]
+    assert "mupdf b" in result[1]
 
 
 def test_front_matter_title_quoted():

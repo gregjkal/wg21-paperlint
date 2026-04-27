@@ -1,6 +1,7 @@
 """Golden regression: full PDF papers vs committed expected Markdown."""
 
 import difflib
+import json
 from pathlib import Path
 
 import pytest
@@ -51,15 +52,18 @@ def test_convert_pdf_matches_golden(stem: str):
             f"Markdown mismatch for {stem}\n{_diff_head(md, expected_md)}",
         )
 
-    golden_prompts = _GOLDEN / f"{stem}.golden.prompts.md"
+    golden_prompts = _GOLDEN / f"{stem}.golden.prompts.json"
     if golden_prompts.is_file():
         assert prompts is not None, f"expected prompts for {stem}"
-        exp_p = golden_prompts.read_text(encoding="utf-8")
-        got_p = _normalize_newlines(prompts)
-        exp_pn = _normalize_newlines(exp_p)
-        if got_p != exp_pn:
+        expected = json.loads(golden_prompts.read_text(encoding="utf-8"))
+        assert isinstance(expected, list)
+        got = [_normalize_newlines(p) for p in prompts]
+        exp = [_normalize_newlines(p) for p in expected]
+        if got != exp:
+            joined_got = "\n---\n".join(got)
+            joined_exp = "\n---\n".join(exp)
             pytest.fail(
-                f"Prompts mismatch for {stem}\n{_diff_head(prompts, exp_p)}",
+                f"Prompts mismatch for {stem}\n{_diff_head(joined_got, joined_exp)}",
             )
     else:
-        assert prompts is None, f"unexpected prompts for {stem}"
+        assert prompts is None, f"unexpected prompts for {stem}: {prompts}"

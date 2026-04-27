@@ -93,10 +93,35 @@ class StorageBackend(ABC):
         """
 
     @abstractmethod
+    def get_evaluation(self, paper_id: str) -> dict:
+        """Return the per-paper evaluation deliverable.
+
+        Raises:
+            paperstore.MissingEvaluationError: no evaluation has been written.
+        """
+
+    @abstractmethod
     def list_mailing(self, mailing_id: str) -> list[dict]:
         """Return the persisted mailing index rows.
 
         Raises:
             paperstore.MissingMailingIndexError: the mailing has never been
                 upserted into this store.
+        """
+
+    @abstractmethod
+    def resolve_mailing_for_paper(self, paper_id: str) -> tuple[str, dict] | None:
+        """Find the mailing containing ``paper_id``.
+
+        Scans persisted mailing indexes for a row whose ``paper_id`` matches
+        (case-insensitive). Returns ``(mailing_id, paper_row)`` on the first
+        match, or ``None`` if no mailing contains the paper. The ``paper_row``
+        dict includes the ``url`` field needed for download.
+        """
+
+    @abstractmethod
+    def list_paper_ids(self) -> list[str]:
+        """Return paper ids for which any artifact (source, md, meta, eval) exists.
+
+        The returned ids are uppercase. Order is unspecified.
         """

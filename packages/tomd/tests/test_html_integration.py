@@ -40,9 +40,10 @@ def test_convert_html_unknown_generator_prompts(tmp_path):
     html = "<html><body><p>Only content</p></body></html>"
     path = _write(tmp_path, "u.html", html)
     md, prompts = convert_html(path)
-    assert prompts is not None
-    assert "HTML Conversion Issues" in prompts
-    assert "Unrecognized" in prompts
+    assert isinstance(prompts, list) and prompts
+    joined = "\n".join(prompts)
+    assert "HTML-to-Markdown conversion" in joined
+    assert "Unrecognized" in joined
     assert "Only content" in md
 
 
@@ -112,5 +113,7 @@ def test_unknown_warning_preserved_when_no_metadata(tmp_path):
 </body></html>"""
     path = _write(tmp_path, "unknown_no_meta.html", html)
     md, prompts = convert_html(path)
-    assert prompts is not None, "warning should be present when extraction failed"
-    assert "Unrecognized" in prompts
+    assert isinstance(prompts, list) and prompts, (
+        "warning should be present when extraction failed"
+    )
+    assert any("Unrecognized" in p for p in prompts)

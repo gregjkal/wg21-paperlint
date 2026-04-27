@@ -15,6 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
+paperflow = "paperlint.__main__:main"
 paperlint = "paperlint.__main__:main"
 
 [build-system]

@@ -1,95 +1,68 @@
 # CLAUDE.md
 
-Guidance for Claude Code (claude.ai/code) when working in this repository.
+## Spellings
 
-## Project context
+- **PaperLint** (prose), **paperlint** (package), **paperflow** (CLI, system, repo)
+- **tomd** (lowercase always), **WG21** (no space)
 
-Paperflow is the uv-workspace monorepo for **PaperLint** and the three libraries it depends on. PaperLint is one project in a wider C++ Alliance / WG21 initiative that Vinnie Falco calls **Civilization Level Reform (CLR)**: an umbrella covering Agora21 (AI red-team analysis of WG21 papers), PRAGMA (the SD-1 voting booth), C++ Herald (AI-generated political journalism), and PaperLint (this repo, objective paper evaluation).
-
-PaperLint is **Sergio DuBois's** project; the bundled `tomd` converter was absorbed from the now-retired [cppalliance/tomd](https://github.com/cppalliance/tomd) (originally Greg Kaleka's) and is now first-class in `packages/tomd/`. For the full glossary of people, related projects, and naming conventions (Agora21, PRAGMA, themod, paperflow, NeuronsLab, ...), the authoritative reference is [`../civ-lvl-rfrm/CLAUDE.md`](../civ-lvl-rfrm/CLAUDE.md) and the PDFs under `../civ-lvl-rfrm/context/`. Do not duplicate that glossary here; link to it when ambiguity shows up.
-
-Practical consequences:
-
-- Canonical spellings: **PaperLint** (in prose) and **paperlint** (package / CLI), **tomd** (lowercase always, commonly misheard as "2MD"), **WG21** (no space), **Scrivener** / **Paperworks** for the other Alliance tools, **paperflow** (system + repo).
-- April 2026 mailing (`2026-04`) is the realistic exercising corpus until May.
-
-## Repository layout
-
-uv workspace with one root `pyproject.toml` and four members under `packages/`:
+## Layout
 
 ```
-wg21-paperflow/
-  pyproject.toml            # workspace root
-  uv.lock
-  packages/
-    paperstore/             # storage abstraction (JsonBackend today)
-    mailing/                # scrape + download from open-std.org
-    tomd/                   # PDF / HTML to Markdown
-    paperlint/              # LLM defect-finder pipeline (user-facing CLI)
-  tests/                    # one cross-package integration test
+packages/
+  paperstore/   -> storage abstraction (JsonBackend)
+  mailing/      -> scrape open-std.org + download paper sources
+  tomd/         -> PDF/HTML to Markdown
+  paperlint/    -> LLM pipeline, hosts the `paperflow` CLI
+tests/          -> cross-package integration test
 ```
 
-Per-package agent rules live in `packages/<name>/src/<name>/CLAUDE.md` and own the deep guidance for their package. This file is the umbrella; consult the per-package files when working inside one.
+Per-package rules: `packages/<name>/src/<name>/CLAUDE.md`. Consult those when working inside a package.
 
-## Environment
-
-Python 3.12+. There is no lockfile beyond `uv.lock`. Development install:
+## CLI commands
 
 ```bash
-uv sync                                   # installs all four packages + dev deps
-source .venv/bin/activate                 # puts paperlint, tomd, mailing, paperstore on PATH
-export OPENROUTER_API_KEY=sk-or-...       # .env / .env.local also auto-loaded
+paperflow mailing [YEAR ...]     # fetch indexes from open-std.org (only internet command for indexes)
+paperflow convert P3642R4        # download source + convert to paper.md + meta.json (no LLM)
+paperflow convert 2026-04        # batch convert all papers in a mailing
+paperflow eval P3642R4           # LLM eval of one paper (needs OPENROUTER_API_KEY)
+paperflow run 2026-04            # LLM eval of all papers in a mailing
 ```
 
-All CLI examples in the docs assume the venv is active. Outside an activated venv, prefix with `uv run` (`uv run paperlint convert ...`).
+Bare paper ids resolve from local mailing indexes. Outside a venv, prefix with `uv run`. Workspace defaults to `$PAPERFLOW_WORKSPACE` or `./data`.
 
-Workspace location: every CLI defaults `--workspace-dir` to `$PAPERFLOW_WORKSPACE` if set, otherwise `./data`. Helper: `paperstore.default_workspace_dir()` (reused by all four CLIs). Override per invocation with `--workspace-dir`; pin across shells with `export PAPERFLOW_WORKSPACE=...`.
+## On-disk layout
 
-`mistune`, `pymupdf`, and `beautifulsoup4` are runtime deps of `tomd` (not test-only) because `paperlint`'s convert path imports `tomd` at module-load time.
+```
+<workspace>/
+  mailings/<mailing-id>.json
+  <pid>.pdf | <pid>.html
+  <pid>.md
+  <pid>.meta.json
+  <pid>.eval.json
+  <pid>.1-findings.json          # intermediate
+  <pid>.2-gate.json              # intermediate
+  <pid>.2c-suppressed.json       # intermediate
+  <pid>.prompts.json             # tomd, uncertain regions only
+```
 
-## Running the CLI
+## Invariants
 
-Two-step flow:
+- **All storage goes through `paperstore.StorageBackend`.** Never write files directly. Never construct paths from `backend.workspace_dir`.
+- **`convert` and `eval`/`run` never share work.** Eval reads via the backend. It never refetches or re-converts.
+- **Always write `<pid>.eval.json`, even on failure.** Partial skeleton with `pipeline_status="partial"`. Missing markdown/metadata raises `FileNotFoundError`, writes nothing.
+- **`prompt_hash`** is SHA-256 (12 hex chars) over all prompts + rubric. Any edit flips the hash; prior runs are stale.
 
-1. **`paperlint convert <mailing-id>`** - fetch sources and write `paper.md` + `meta.json`. No LLM, no API key needed.
-2. **`paperlint eval <mailing-id>/<paper-id>`** (single) or **`paperlint run <mailing-id>`** (batch) - load the converted artifacts and run the LLM pipeline. Missing `paper.md` / `meta.json` is a hard error: the CLI tells the caller to run `convert` first and exits.
-
-Bare paper ids (`eval P3642R4`) and local file paths are not accepted; every invocation names the mailing explicitly. The open-std.org mailing index is authoritative for title / authors / audience / paper_type and is refetched on every `convert` / `eval` / `run` (index only; not the PDFs).
-
-`--workspace-dir` (alias `--output-dir`) is both the input and output root for the default `JsonBackend`; it defaults to `$PAPERFLOW_WORKSPACE` or `./data`. `--papers A,B` / `--paper X` filter the mailing list, then `--max-cap N` slices, then `--max-workers N` parallelizes. `--discovery-passes N` (default 3) controls the multi-pass discovery stage.
-
-Per-package CLIs (`paperstore`, `mailing ...`, `tomd ...`) are also installed.
-
-## Running tests
+## Tests
 
 ```bash
 uv run pytest                                  # full workspace
-uv run --package paperstore pytest             # one package in isolation
-uv run pytest tests/test_end_to_end_convert.py # the cross-package integration
+uv run --package paperstore pytest             # one package
+uv run pytest tests/test_end_to_end_convert.py # integration
 ```
 
-Tests are hermetic by design. None of the LLM calls are hit in-process; the pipeline modules are stubbed at the seam (`paperlint.llm.call_with_retry`, `build_client`). `requests.get` in `mailing.download` is the stub seam for download tests.
+Stub seams: `paperlint.llm.call_with_retry` / `build_client` for LLM calls. `requests.get` on `mailing.download` for downloads.
 
-## Pipeline architecture (one-paragraph summary)
+## Style
 
-`run_paper_eval` (`packages/paperlint/src/paperlint/orchestrator.py`) orchestrates per-paper evaluation: load the previously-converted paper, run multi-pass LLM discovery, drop findings whose evidence quotes don't appear in `paper.md`, run the LLM gate, suppress known false positives, write the prose summary, assemble `evaluation.json`. Detailed step list and invariants live in [`packages/paperlint/src/paperlint/CLAUDE.md`](packages/paperlint/src/paperlint/CLAUDE.md).
-
-## Workspace-wide invariants
-
-- **Storage goes through `paperstore.StorageBackend`.** `JsonBackend` is the only implementation, but call sites must not assume it. A future Postgres backend will drop in without code changes elsewhere. Don't bypass the backend by writing files directly from orchestrator or pipeline.
-- **`convert` and `eval`/`run` never share work.** Eval reads `paper.md` and `meta.json` via the backend; it never refetches or re-tomds. If you find yourself adding a fetch to the eval path, reconsider.
-- **`prompt_hash`** is a SHA-256 (truncated to 12 hex chars) over all `packages/paperlint/src/paperlint/prompts/**/*.md` plus `rubric.md`, sorted lexically. Any prompt or rubric edit flips the hash; consumers should treat prior runs as stale. Extensions in `paperlint/prompts/extensions/` are hashed even though they are not yet wired into a pipeline step.
-- **Always write `evaluation.json`, even on analysis failure.** The orchestrator catches analysis-stage exceptions and writes a `pipeline_status="partial"` skeleton. Missing `paper.md` / `meta.json` is a different path: it raises `FileNotFoundError` and writes nothing.
-
-## Failure model and logging
-
-- `PAPERLINT_ERROR_TRACEBACK=1` - embed tracebacks in `evaluation.json` on partial runs.
-- `PAPERLINT_LOG_FILE=/path/to/log` - append structured logs there.
-- `PAPERLINT_LOG_TO_WORKSPACE=1` - append to `<workspace>/paperlint.log` instead.
-
-`paperlint.logutil` owns log configuration and is idempotent.
-
-## Writing style
-
-- Do not use em dashes (`--`) in prose, commit messages, or PR bodies. Use commas, periods, or colons.
-- Copyright headers on new `.py` files follow Boost Software License 1.0. Attribute the file to whoever authors it (the contributor directing the work), not to a fixed project-wide name. When editing an existing file, leave the original author's header alone.
+- No em dashes. Use commas, periods, or colons.
+- BSL-1.0 copyright headers on new `.py` files. Attribute to whoever authors the file. Leave existing headers alone.

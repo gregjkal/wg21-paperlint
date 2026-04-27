@@ -119,7 +119,7 @@ def _is_standards_draft(doc) -> bool:
 class PipelineResult:
     """Full output of the PDF conversion pipeline, used for QA scoring."""
     md: str = ""
-    prompts: str | None = None
+    prompts: list[str] | None = None
     sections: list[Section] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
     page_count: int = 0
@@ -286,12 +286,16 @@ def _run_pipeline(path: Path) -> PipelineResult:
     prompts = emit_prompts(sections)
 
     if wording_problems:
-        wording_prompt = "\n\n".join(
-            ["\n## Wording Detection Issues\n"] + wording_problems)
-        if prompts:
-            prompts += "\n" + wording_prompt
-        else:
-            prompts = "# tomd - Conversion Issues\n" + wording_prompt
+        wording_prompts = [
+            (
+                "The PDF wording-detection pass flagged the following issue. "
+                "Review and correct the affected region in the converted "
+                "Markdown.\n\n"
+                f"{problem}"
+            )
+            for problem in wording_problems
+        ]
+        prompts = (prompts or []) + wording_prompts
 
     result.md = md
     result.prompts = prompts
@@ -301,12 +305,15 @@ def _run_pipeline(path: Path) -> PipelineResult:
     return result
 
 
-def convert_pdf(path: Path) -> tuple[str, str | None]:
+def convert_pdf(path: Path) -> tuple[str, list[str] | None]:
     """Convert a PDF file to Markdown.
 
-    Returns (markdown_text, prompts_text_or_none).
-    Returns ("", None) for empty or unreadable PDFs.
-    Raises fitz exceptions for corrupt or inaccessible files.
+    Returns ``(markdown_text, prompts_or_none)`` where ``prompts_or_none``
+    is a list of self-contained LLM reconcile prompts (one per uncertain
+    region, plus one per flagged wording issue) or ``None`` when the
+    converter is fully confident. Returns ``("", None)`` for empty or
+    unreadable PDFs. Raises fitz exceptions for corrupt or inaccessible
+    files.
     """
     r = _run_pipeline(path)
     return r.md, r.prompts

@@ -11,13 +11,13 @@ from . import render as _render
 _log = logging.getLogger(__name__)
 
 
-def convert_html(path: Path | os.PathLike[str]) -> tuple[str, str | None]:
+def convert_html(path: Path | os.PathLike[str]) -> tuple[str, list[str] | None]:
     """Convert an HTML file to Markdown.
 
-    Reads the file as UTF-8 (with replacement for decode errors).
-    Returns (markdown_text, prompts_text_or_none).
-    HTML conversion produces a prompts file only when sections
-    cannot be converted cleanly.
+    Reads the file as UTF-8 (with replacement for decode errors). Returns
+    ``(markdown_text, prompts_or_none)`` where ``prompts_or_none`` is a
+    list of self-contained LLM reconcile prompts (one per flagged HTML
+    conversion issue) or ``None`` when conversion was fully clean.
     """
     path = Path(path)
     text = path.read_text(encoding="utf-8", errors="replace")
@@ -45,19 +45,16 @@ def convert_html(path: Path | os.PathLike[str]) -> tuple[str, str | None]:
     md = "\n\n".join(parts)
     md = md.rstrip() + "\n"
 
-    prompts = None
+    prompts: list[str] | None = None
     if problems:
-        prompt_parts = [
-            "# tomd - HTML Conversion Issues",
-            "",
-            "The following issues were encountered during HTML-to-Markdown conversion.",
-            "",
+        prompts = [
+            (
+                "The HTML-to-Markdown conversion encountered the following issue. "
+                "Review and correct the affected region in the converted "
+                "Markdown.\n\n"
+                f"{problem}"
+            )
+            for problem in problems
         ]
-        for i, problem in enumerate(problems, 1):
-            prompt_parts.append(f"## Issue {i}")
-            prompt_parts.append("")
-            prompt_parts.append(problem)
-            prompt_parts.append("")
-        prompts = "\n".join(prompt_parts)
 
     return md, prompts

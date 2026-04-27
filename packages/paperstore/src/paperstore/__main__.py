@@ -21,7 +21,13 @@ import sys
 from pathlib import Path
 
 from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
-from paperstore.errors import MissingMailingIndexError, MissingMetaError
+from paperstore.errors import (
+    MissingEvaluationError,
+    MissingMailingIndexError,
+    MissingMetaError,
+    MissingPaperMdError,
+    MissingSourceError,
+)
 
 
 def _cmd_list_mailings(backend: JsonBackend) -> int:
@@ -48,6 +54,30 @@ def _cmd_show_mailing(backend: JsonBackend, mailing_id: str) -> int:
     return 0
 
 
+def _has_source(backend: JsonBackend, pid: str) -> bool:
+    try:
+        backend.get_source_path(pid)
+        return True
+    except MissingSourceError:
+        return False
+
+
+def _has_paper_md(backend: JsonBackend, pid: str) -> bool:
+    try:
+        backend.get_paper_md(pid)
+        return True
+    except MissingPaperMdError:
+        return False
+
+
+def _has_evaluation(backend: JsonBackend, pid: str) -> bool:
+    try:
+        backend.get_evaluation(pid)
+        return True
+    except MissingEvaluationError:
+        return False
+
+
 def _cmd_ls_papers(backend: JsonBackend, mailing_id: str | None) -> int:
     if mailing_id:
         try:
@@ -57,18 +87,17 @@ def _cmd_ls_papers(backend: JsonBackend, mailing_id: str | None) -> int:
             return 1
         ids = [row["paper_id"].upper() for row in rows]
     else:
-        ids = [
-            p.name
-            for p in sorted(backend.workspace_dir.iterdir())
-            if p.is_dir() and p.name != "mailings"
-        ]
+        ids = backend.list_paper_ids()
+
     for pid in ids:
-        pdir = backend.workspace_dir / pid
-        have_src = any(pdir.glob("source.*"))
-        have_md = (pdir / "paper.md").is_file()
-        have_eval = (pdir / "evaluation.json").is_file()
         marks = "".join(
-            m for m, present in [("s", have_src), ("m", have_md), ("e", have_eval)] if present
+            m
+            for m, present in [
+                ("s", _has_source(backend, pid)),
+                ("m", _has_paper_md(backend, pid)),
+                ("e", _has_evaluation(backend, pid)),
+            ]
+            if present
         ) or "-"
         print(f"{pid}\t{marks}")
     return 0

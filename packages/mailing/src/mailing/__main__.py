@@ -172,10 +172,7 @@ def main() -> int:
         f"{counts['downloaded']} downloaded, {counts['skipped']} already staged, "
         f"{counts['no_url']} without url, {counts['filtered_out']} filtered out."
     )
-    print(
-        f"Sources under {store.workspace_dir} (one dir per paper id); "
-        f"index at {store.mailing_index_path(mailing_id)}."
-    )
+    print(f"Workspace: {store.workspace_dir}")
     return 0
 
 

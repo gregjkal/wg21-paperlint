@@ -30,12 +30,17 @@ def _stage(store: JsonBackend, paper_id: str, *, suffix: str, mailing_row: dict)
     store.upsert_mailing_index("2026-02", [row])
 
 
-def _patch_html(monkeypatch, md: str, prompts: str | None = None):
+def _patch_html(monkeypatch, md: str, prompts: list[str] | None = None):
     monkeypatch.setattr(api, "convert_html", lambda _p: (md, prompts))
 
 
-def _patch_pdf(monkeypatch, md: str, prompts: str | None = None):
+def _patch_pdf(monkeypatch, md: str, prompts: list[str] | None = None):
     monkeypatch.setattr(api, "convert_pdf", lambda _p: (md, prompts))
+
+
+def _convert_and_read(store: JsonBackend, paper_id: str) -> str:
+    md_path = api.convert_paper(paper_id, store)
+    return md_path.read_text(encoding="utf-8")
 
 
 class TestDispatch:
@@ -44,26 +49,26 @@ class TestDispatch:
         _stage(store, "P1", suffix=".html", mailing_row={"title": "T"})
         _patch_html(monkeypatch, "# Body\n\ntext\n")
         _patch_pdf(monkeypatch, "PDF SHOULD NOT BE CALLED")
-        out = api.convert_paper("P1", store)
-        assert "PDF SHOULD NOT BE CALLED" not in out
-        assert "text" in out
-        assert store.get_paper_md("P1") == out
+        md = _convert_and_read(store, "P1")
+        assert "PDF SHOULD NOT BE CALLED" not in md
+        assert "text" in md
+        assert store.get_paper_md("P1") == md
 
     def test_pdf_path_calls_convert_pdf(self, tmp_path: Path, monkeypatch):
         store = JsonBackend(tmp_path)
         _stage(store, "P1", suffix=".pdf", mailing_row={"title": "T"})
         _patch_html(monkeypatch, "HTML SHOULD NOT BE CALLED")
         _patch_pdf(monkeypatch, "# Body\n\ntext\n")
-        out = api.convert_paper("P1", store)
-        assert "HTML SHOULD NOT BE CALLED" not in out
-        assert "text" in out
+        md = _convert_and_read(store, "P1")
+        assert "HTML SHOULD NOT BE CALLED" not in md
+        assert "text" in md
 
 
 class TestEmptyMarkdownRaises:
     def test_empty_string_raises(self, tmp_path: Path, monkeypatch):
         store = JsonBackend(tmp_path)
         _stage(store, "P1", suffix=".pdf", mailing_row={"title": "T"})
-        _patch_pdf(monkeypatch, "", "# tomd - Slide Deck Detected\n")
+        _patch_pdf(monkeypatch, "", ["slide-deck detected"])
         with pytest.raises(RuntimeError, match="empty markdown"):
             api.convert_paper("P1", store)
 
@@ -87,9 +92,9 @@ class TestStripTocSafetyNet:
             "## Real Section\n\nText.\n"
         )
         _patch_html(monkeypatch, body)
-        out = api.convert_paper("P1", store)
-        assert "Real Section" in out
-        assert "1. Intro" not in out
+        md = _convert_and_read(store, "P1")
+        assert "Real Section" in md
+        assert "1. Intro" not in md
 
 
 class TestMetadataFallback:
@@ -106,15 +111,15 @@ class TestMetadataFallback:
             },
         )
         _patch_html(monkeypatch, "Body only.\n")
-        out = api.convert_paper("P3642R4", store)
-        assert out.startswith("---\n")
-        assert "title:" in out
-        assert "Carry-less product" in out
-        assert "document: p3642r4" in out
-        assert "audience: LEWG" in out
-        assert "reply-to:" in out
-        assert "paper-type: proposal" in out
-        assert "Body only." in out
+        md = _convert_and_read(store, "P3642R4")
+        assert md.startswith("---\n")
+        assert "title:" in md
+        assert "Carry-less product" in md
+        assert "document: p3642r4" in md
+        assert "audience: LEWG" in md
+        assert "reply-to:" in md
+        assert "paper-type: proposal" in md
+        assert "Body only." in md
 
     def test_existing_field_wins_over_fallback(self, tmp_path: Path, monkeypatch):
         store = JsonBackend(tmp_path)
@@ -129,10 +134,10 @@ class TestMetadataFallback:
             "Body.\n"
         )
         _patch_html(monkeypatch, body)
-        out = api.convert_paper("P1", store)
-        assert '"Source Title"' in out
-        assert "Mailing Title" not in out
-        assert "audience: LWG" in out
+        md = _convert_and_read(store, "P1")
+        assert '"Source Title"' in md
+        assert "Mailing Title" not in md
+        assert "audience: LWG" in md
 
     def test_empty_meta_value_skipped(self, tmp_path: Path, monkeypatch):
         store = JsonBackend(tmp_path)
@@ -141,10 +146,10 @@ class TestMetadataFallback:
             mailing_row={"title": "T", "subgroup": "", "authors": []},
         )
         _patch_html(monkeypatch, "Body.\n")
-        out = api.convert_paper("P1", store)
-        assert "title: T" in out
-        assert "audience:" not in out
-        assert "reply-to:" not in out
+        md = _convert_and_read(store, "P1")
+        assert "title: T" in md
+        assert "audience:" not in md
+        assert "reply-to:" not in md
 
 
 class TestErrors:

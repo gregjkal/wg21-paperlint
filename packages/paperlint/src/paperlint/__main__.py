@@ -7,33 +7,30 @@
 # Official repository: https://github.com/cppalliance/paperlint
 #
 
-"""Paperlint CLI — evaluate WG21 papers for mechanically verifiable defects.
+"""Paperflow CLI - WG21 paper ingestion, conversion, and evaluation.
 
-Two-step flow (no duplicate conversion in eval/run):
+Three-step flow:
 
-1. **convert** — fetch sources and build ``paper.md`` + ``meta.json`` (no LLM).
-   Limit work with ``--papers P1,P2`` or a single ``--paper P1``.
-2. **eval** (one paper) or **run** (batch) — load those files and run the LLM
-   pipeline to ``evaluation.json`` (requires ``OPENROUTER_API_KEY``).
+1. **mailing** - fetch mailing indexes from open-std.org (the only internet
+   step for index metadata). Accepts years or no args (all years).
+2. **convert** - download paper source and convert to markdown. Resolves
+   papers from local mailing indexes. No LLM calls.
+3. **eval** (one paper) or **run** (batch) - load converted artifacts and
+   run the LLM pipeline to ``evaluation.json``.
 
 Example::
 
-    paperlint convert 2026-02 --paper P3642R4
-    paperlint eval 2026-02/P3642R4
+    paperflow mailing 2026
+    paperflow convert P3642R4
+    paperflow eval P3642R4
 
-The open-std.org mailing index is authoritative for paper metadata. Every
-``eval``/``run``/``convert`` run refreshes ``mailings/<id>.json``. Local file
-paths and bare paper ids are not accepted.
-
-``--workspace-dir`` (alias: ``--output-dir``) is the JSON-backend root: the same
-directory is written and read for mailing indices, converted papers, and
-evaluations. It defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``. This is
-the only on-disk backend today; a Postgres backend may be added later via
-the storage API.
+``--workspace-dir`` (alias: ``--output-dir``) is the JSON-backend root. It
+defaults to ``$PAPERFLOW_WORKSPACE`` or ``./data``.
 """
 
 import argparse
 import json
+import os
 import re
 import sys
 import traceback
@@ -58,12 +55,19 @@ from paperlint.orchestrator import (
     run_paper_eval,
 )
 from paperstore import WORKSPACE_ENV_VAR, JsonBackend, default_workspace_dir
+from paperstore.errors import MissingMailingIndexError
 
 _WORKSPACE_DIR_HELP = (
-    "Workspace directory: mailings/<id>.json, per-paper dirs (paper.md, "
-    "evaluation.json, …), and run's index.json. Same path is read and written. "
-    f"Alias: --output-dir. Default: ${WORKSPACE_ENV_VAR} or ./data."
+    "Workspace directory: mailings/<id>.json plus flat per-paper artifacts "
+    "(<pid>.pdf|.html, <pid>.md, <pid>.meta.json, <pid>.eval.json, ...). "
+    "Same path is read and written. Alias: --output-dir. "
+    f"Default: ${WORKSPACE_ENV_VAR} or ./data."
 )
+
+_YEAR_RE = re.compile(r"^\d{4}$")
+_MAILING_ID_RE = re.compile(r"^\d{4}-\d{2}$")
+_EVAL_REF_RE = re.compile(r"^(?P<mailing>\d{4}-\d{2})/(?P<paper>[A-Za-z][A-Za-z0-9\-]*)$")
+_BARE_PAPER_RE = re.compile(r"^[A-Za-z]")
 
 
 def _add_workspace_dir_arg(p: argparse.ArgumentParser) -> None:
@@ -78,13 +82,47 @@ def _add_workspace_dir_arg(p: argparse.ArgumentParser) -> None:
 
 
 def _backend_for(workspace_dir: Path) -> JsonBackend:
-    """Construct the default JSON storage backend rooted at ``workspace_dir``.
-
-    Centralized here so a future ``--storage postgres://...`` flag can be
-    added in one place without touching every CLI command.
-    """
+    """Construct the default JSON storage backend rooted at ``workspace_dir``."""
     return JsonBackend(workspace_dir)
 
+
+def _classify_arg(arg: str) -> str:
+    """Classify a positional argument as 'year', 'mailing', 'eval_ref', or 'paper'."""
+    if _YEAR_RE.match(arg):
+        return "year"
+    if _MAILING_ID_RE.match(arg):
+        return "mailing"
+    if _EVAL_REF_RE.match(arg):
+        return "eval_ref"
+    if _BARE_PAPER_RE.match(arg):
+        return "paper"
+    raise ValueError(
+        f"Unrecognized argument format: {arg!r}. Expected a year (2026), "
+        f"mailing id (2026-04), paper id (P2900R15), or eval ref (2026-04/P2900R15)."
+    )
+
+
+def _resolve_paper_locally(
+    paper_id: str, backend: JsonBackend
+) -> tuple[str, dict]:
+    """Resolve a bare paper ID from local mailing indexes.
+
+    Returns ``(mailing_id, paper_row)``. Raises ``SystemExit`` on failure.
+    """
+    result = backend.resolve_mailing_for_paper(paper_id)
+    if result is None:
+        print(
+            f"Error: {paper_id.upper()} not found in local mailing indexes.\n"
+            f"Run 'paperflow mailing' to fetch indexes from open-std.org first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Helper wrappers (unchanged from prior version)
+# ---------------------------------------------------------------------------
 
 def _eval_one_paper(
     paper_ref: str,
@@ -205,31 +243,8 @@ def _build_index(workspace_dir: Path, mailing_id: str, results: list[dict]) -> d
     return to_dict(index)
 
 
-_EVAL_CONTRACT_MSG = (
-    "eval expects <mailing-id>/<paper-id> (e.g. 2026-02/P3642R4). "
-    "The open-std.org mailing index is authoritative; local file paths and "
-    "bare paper ids are not accepted. To evaluate a cached local file, drop "
-    "it into .paperlint_cache/ and invoke via its mailing/paper-id."
-)
-
-_EVAL_REF_RE = re.compile(r"^(?P<mailing>\d{4}-\d{2})/(?P<paper>[A-Za-z][A-Za-z0-9\-]*)$")
-
-_EPILOG_CONVERT = (
-    "Only paper ids listed in --papers and/or --paper are downloaded and "
-    "converted (not the whole mailing). Run eval or run after this step."
-)
-_EPILOG_RUN = (
-    "Evaluates papers that already have paper.md and meta.json (run convert first). "
-    "Use --papers / --paper to limit which papers to process."
-)
-_EPILOG_EVAL = (
-    "Loads paper.md and meta.json from the workspace; run "
-    "'paperlint convert <mailing> --paper <id>' first if missing."
-)
-
-
 def _parse_papers_filter(papers_arg: str | None) -> set[str] | None:
-    """Return uppercase paper ids, or None if the argument is empty (meaning no filter)."""
+    """Return uppercase paper ids, or None if the argument is empty."""
     if not papers_arg or not str(papers_arg).strip():
         return None
     return {p.strip().upper() for p in str(papers_arg).split(",") if p.strip()}
@@ -238,7 +253,7 @@ def _parse_papers_filter(papers_arg: str | None) -> set[str] | None:
 def _merge_paper_selectors(
     single: str | None, comma_list: str | None
 ) -> str | None:
-    """Join ``--paper`` and ``--papers`` into a comma string for :func:`_parse_papers_filter`."""
+    """Join ``--paper`` and ``--papers`` into a comma string."""
     parts: list[str] = []
     if single and str(single).strip():
         parts.append(str(single).strip())
@@ -254,7 +269,7 @@ def _merge_paper_selectors(
 def _filter_papers_list(
     papers: list[dict], mailing_id: str, want: set[str] | None, *, what: str
 ) -> list[dict]:
-    """If *want* is set, keep only those paper_id (case-insensitive) and warn on unknown ids."""
+    """If *want* is set, keep only matching paper_ids and warn on unknowns."""
     if not want:
         return list(papers)
     have = {p["paper_id"].upper() for p in papers}
@@ -264,47 +279,189 @@ def _filter_papers_list(
             f"Warning: {what} {mailing_id!r} has no paper_id(s): {', '.join(missing)}",
             file=sys.stderr,
         )
-    out = [p for p in papers if p["paper_id"].upper() in want]
-    return out
+    return [p for p in papers if p["paper_id"].upper() in want]
 
 
-def _parse_eval_ref(ref: str) -> tuple[str, str]:
-    """Parse a <mailing-id>/<paper-id> reference. Raise ValueError on violation."""
-    m = _EVAL_REF_RE.match(ref.strip())
-    if not m:
-        raise ValueError(f"invalid eval ref {ref!r}. {_EVAL_CONTRACT_MSG}")
-    return m.group("mailing"), m.group("paper").upper()
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
 
+def cmd_mailing(args: argparse.Namespace) -> int:
+    """Fetch mailing indexes from open-std.org and persist locally.
 
-def cmd_eval(args: argparse.Namespace) -> int:
-    from mailing.scrape import fetch_papers_for_mailing
-
-    try:
-        mailing_id, paper_id = _parse_eval_ref(args.paper)
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 2
+    The only command that fetches index metadata from the internet. Idempotent:
+    re-running preserves existing entries and their ``added`` timestamps.
+    """
+    from mailing.scrape import discover_years, fetch_all_mailings_for_year
 
     workspace_dir = Path(args.workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Fetching mailing index for {mailing_id}...")
-    papers = fetch_papers_for_mailing(mailing_id)
-    if not papers:
-        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
-        return 1
-
     backend = _backend_for(workspace_dir)
-    merged = backend.upsert_mailing_index(mailing_id, papers)
 
-    meta = next((p for p in merged if p["paper_id"].lower() == paper_id.lower()), None)
-    if not meta:
+    years = args.years if args.years else None
+    if not years:
+        print("Discovering available years from open-std.org...")
+        years = discover_years()
+        if not years:
+            print("No years found on open-std.org.", file=sys.stderr)
+            return 1
+        print(f"Found {len(years)} years: {years[0]}-{years[-1]}")
+
+    total_mailings = 0
+    total_papers = 0
+    for year in years:
+        if not _YEAR_RE.match(year):
+            print(f"Error: {year!r} is not a valid year. Expected 4-digit year (e.g. 2026).", file=sys.stderr)
+            return 2
+        print(f"Fetching {year}...")
+        all_mailings = fetch_all_mailings_for_year(year)
+        if not all_mailings:
+            print(f"  No mailings found for {year}.")
+            continue
+        for mailing_id, papers in sorted(all_mailings.items()):
+            merged = backend.upsert_mailing_index(mailing_id, papers)
+            total_mailings += 1
+            total_papers += len(merged)
+
+    print(f"\n{'=' * 60}")
+    print(f"Mailing sync complete: {total_mailings} mailings, {total_papers} papers")
+    print(f"{'=' * 60}")
+    return 0
+
+
+def cmd_convert(args: argparse.Namespace) -> int:
+    """Download and convert papers to markdown. No LLM calls.
+
+    Reads the local mailing index to find paper source URLs. Does not fetch
+    mailing indexes from the internet. Run ``paperflow mailing`` first to
+    populate the local index.
+    """
+    workspace_dir = Path(args.workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    backend = _backend_for(workspace_dir)
+    max_cap = args.max_cap
+    max_workers = args.max_workers
+
+    target = args.target
+    kind = _classify_arg(target)
+
+    if kind == "paper":
+        mailing_id, meta = _resolve_paper_locally(target, backend)
+        print(f"Resolved {target.upper()} to mailing {mailing_id}")
+        r = _convert_one(target.upper(), workspace_dir, meta.get("url", ""), meta)
+        status = "OK" if r["status"] == "ok" else "FAILED"
+        print(f"  [{status}] {target.upper()}")
+        return 0 if r["status"] == "ok" else 1
+
+    if kind == "mailing":
+        mailing_id = target
+        try:
+            papers = backend.list_mailing(mailing_id)
+        except MissingMailingIndexError:
+            print(
+                f"Error: No local mailing index for {mailing_id}.\n"
+                f"Run 'paperflow mailing {mailing_id.split('-')[0]}' first.",
+                file=sys.stderr,
+            )
+            return 1
+
+        meta_by_id = {p["paper_id"]: p for p in papers}
+        sel = _merge_paper_selectors(
+            getattr(args, "paper", None), getattr(args, "papers", None)
+        )
+        pf = _parse_papers_filter(sel)
+        if pf:
+            papers = _filter_papers_list(papers, mailing_id, pf, what="mailing")
+            if not papers:
+                print("No papers to convert after filter.", file=sys.stderr)
+                return 1
+        if max_cap > 0:
+            papers = papers[:max_cap]
+
+        print(f"Converting {len(papers)} papers from {mailing_id}...")
+        results: list[dict] = []
+        if max_workers == 1:
+            for p in papers:
+                pid = p["paper_id"]
+                pm = meta_by_id.get(pid, p)
+                r = _convert_one(pid, workspace_dir, pm.get("url", ""), pm)
+                results.append(r)
+                status = "OK" if r["status"] == "ok" else "FAILED"
+                print(f"  [{status}] {pid}")
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+                for p in papers:
+                    pid = p["paper_id"]
+                    pm = meta_by_id.get(pid, p)
+                    f = executor.submit(
+                        _convert_one, pid, workspace_dir, pm.get("url", ""), pm,
+                    )
+                    futures[f] = pid
+                for future in as_completed(futures):
+                    pid = futures[future]
+                    r = future.result()
+                    results.append(r)
+                    status = "OK" if r["status"] == "ok" else "FAILED"
+                    print(f"  [{status}] {pid}")
+
+        succeeded = sum(1 for r in results if r["status"] == "ok")
+        failed = len(results) - succeeded
+        print(f"\n{'=' * 60}")
+        print(f"Convert {mailing_id}: {succeeded}/{len(results)} succeeded, {failed} failed")
+        print(f"{'=' * 60}")
+        return 0 if failed == 0 else 1
+
+    print(
+        f"Error: convert expects a paper id (P2900R15) or mailing id (2026-04), "
+        f"got {target!r}.",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Evaluate a single paper via the LLM pipeline.
+
+    Accepts a bare paper id (P2900R15) or a mailing/paper ref (2026-04/P2900R15).
+    Reads paper.md and meta.json from the workspace. Run ``paperflow convert``
+    first if missing.
+    """
+    workspace_dir = Path(args.workspace_dir)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    backend = _backend_for(workspace_dir)
+
+    ref = args.paper
+    kind = _classify_arg(ref)
+
+    if kind == "eval_ref":
+        m = _EVAL_REF_RE.match(ref.strip())
+        mailing_id = m.group("mailing")
+        paper_id = m.group("paper").upper()
+        try:
+            papers = backend.list_mailing(mailing_id)
+        except MissingMailingIndexError:
+            print(
+                f"Error: No local mailing index for {mailing_id}.\n"
+                f"Run 'paperflow mailing {mailing_id.split('-')[0]}' first.",
+                file=sys.stderr,
+            )
+            return 1
+        meta = next((p for p in papers if p["paper_id"].upper() == paper_id), None)
+        if not meta:
+            print(f"Error: {paper_id} not found in mailing {mailing_id}.", file=sys.stderr)
+            return 1
+    elif kind == "paper":
+        paper_id = ref.upper()
+        mailing_id, meta = _resolve_paper_locally(ref, backend)
+        print(f"Resolved {paper_id} to mailing {mailing_id}")
+    else:
         print(
-            f"Error: {paper_id} not found in mailing {mailing_id}. "
-            f"Check the paper id or the mailing.",
+            f"Error: eval expects a paper id (P2900R15) or eval ref (2026-04/P2900R15), "
+            f"got {ref!r}.",
             file=sys.stderr,
         )
-        return 1
+        return 2
 
     try:
         run_paper_eval(
@@ -316,7 +473,11 @@ def cmd_eval(args: argparse.Namespace) -> int:
         )
         return 0
     except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(
+            f"Error: {e}\n"
+            f"Run 'paperflow convert {paper_id}' first.",
+            file=sys.stderr,
+        )
         return 1
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -325,26 +486,30 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    from mailing.scrape import fetch_papers_for_mailing
+    """Evaluate all papers in a mailing via the LLM pipeline.
 
+    Reads from the local mailing index. Run ``paperflow mailing`` and
+    ``paperflow convert`` first.
+    """
     workspace_dir = Path(args.workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
+    backend = _backend_for(workspace_dir)
 
     mailing_id = args.mailing_id
     max_cap = args.max_cap
     max_processes = args.max_processes if args.max_processes is not None else args.max_workers
 
-    print(f"Fetching paper list for mailing {mailing_id}...")
-    papers = fetch_papers_for_mailing(mailing_id)
-
-    if not papers:
-        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
+    try:
+        papers = backend.list_mailing(mailing_id)
+    except MissingMailingIndexError:
+        print(
+            f"Error: No local mailing index for {mailing_id}.\n"
+            f"Run 'paperflow mailing {mailing_id.split('-')[0]}' first.",
+            file=sys.stderr,
+        )
         return 1
 
-    backend = _backend_for(workspace_dir)
-    merged = backend.upsert_mailing_index(mailing_id, papers)
-
-    meta_by_id = {p["paper_id"]: p for p in merged}
+    meta_by_id = {p["paper_id"]: p for p in papers}
 
     sel = _merge_paper_selectors(
         getattr(args, "paper", None), getattr(args, "papers", None)
@@ -365,11 +530,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     if max_processes == 1:
         for p in papers:
             pid = p["paper_id"]
-            pm = meta_by_id.get(pid)
+            pm = meta_by_id.get(pid, p)
             result = _eval_one_paper(
                 pid,
                 workspace_dir,
-                source_url=pm["url"] if pm else "",
+                source_url=pm.get("url", ""),
                 mailing_meta=pm,
                 discovery_passes=args.discovery_passes,
             )
@@ -381,12 +546,12 @@ def cmd_run(args: argparse.Namespace) -> int:
             futures = {}
             for p in papers:
                 pid = p["paper_id"]
-                pm = meta_by_id.get(pid)
+                pm = meta_by_id.get(pid, p)
                 f = executor.submit(
                     _eval_one_paper,
                     pid,
                     workspace_dir,
-                    pm["url"] if pm else "",
+                    pm.get("url", "") if pm else "",
                     pm,
                     discovery_passes=args.discovery_passes,
                 )
@@ -414,114 +579,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if failed == 0 else 1
 
 
-def cmd_convert(args: argparse.Namespace) -> int:
-    """Fetch and convert all papers in a mailing to markdown — no AI eval.
-
-    This is the standalone ingestion path: it satisfies directives 6 and 8
-    by writing ``paper.md`` + ``meta.json`` per paper plus a fresh mailing
-    index, with no LLM calls. The AI evaluation pipeline is opt-in via the
-    ``run`` (or ``eval``) subcommand.
-    """
-    from mailing.scrape import fetch_papers_for_mailing
-
-    workspace_dir = Path(args.workspace_dir)
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-
-    mailing_id = args.mailing_id
-    max_cap = args.max_cap
-    max_workers = args.max_workers
-
-    print(f"Fetching paper list for mailing {mailing_id}...")
-    papers = fetch_papers_for_mailing(mailing_id)
-    if not papers:
-        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
-        return 1
-
-    backend = _backend_for(workspace_dir)
-    merged = backend.upsert_mailing_index(mailing_id, papers)
-
-    meta_by_id = {p["paper_id"]: p for p in merged}
-
-    sel = _merge_paper_selectors(
-        getattr(args, "paper", None), getattr(args, "papers", None)
-    )
-    pf = _parse_papers_filter(sel)
-    if pf:
-        papers = _filter_papers_list(papers, mailing_id, pf, what="mailing")
-        if not papers:
-            print("No papers to convert after --papers filter.", file=sys.stderr)
-            return 1
-    if max_cap > 0:
-        papers = papers[:max_cap]
-
-    print(f"Converting {len(papers)} papers with {max_workers} workers...")
-
-    results: list[dict] = []
-    if max_workers == 1:
-        for p in papers:
-            pid = p["paper_id"]
-            pm = meta_by_id.get(pid)
-            r = _convert_one(pid, workspace_dir, pm["url"] if pm else "", pm)
-            results.append(r)
-            status = "OK" if r["status"] == "ok" else "FAILED"
-            print(f"\n  [{status}] {pid}")
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {}
-            for p in papers:
-                pid = p["paper_id"]
-                pm = meta_by_id.get(pid)
-                f = executor.submit(
-                    _convert_one,
-                    pid,
-                    workspace_dir,
-                    pm["url"] if pm else "",
-                    pm,
-                )
-                futures[f] = pid
-            for future in as_completed(futures):
-                pid = futures[future]
-                r = future.result()
-                results.append(r)
-                status = "OK" if r["status"] == "ok" else "FAILED"
-                print(f"\n  [{status}] {pid}")
-
-    succeeded = sum(1 for r in results if r["status"] == "ok")
-    failed = len(results) - succeeded
-    print(f"\n{'=' * 60}")
-    print(f"Convert {mailing_id} complete: {succeeded}/{len(results)} succeeded, {failed} failed")
-    print(f"{'=' * 60}")
-    return 0 if failed == 0 else 1
-
-
-def cmd_mailing(args: argparse.Namespace) -> int:
-    """Fetch and persist the ground-truth mailing index.
-
-    Writes ``<workspace-dir>/mailings/<mailing-id>.json``. Idempotent: re-running
-    keeps existing entries (and their original ``added`` timestamps) and
-    appends only newly listed papers.
-    """
-    from mailing.scrape import fetch_papers_for_mailing
-
-    mailing_id = args.mailing_id
-    workspace_dir = Path(args.workspace_dir)
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"Fetching mailing index for {mailing_id} from open-std.org...")
-    papers = fetch_papers_for_mailing(mailing_id)
-    if not papers:
-        print(f"No papers found for mailing {mailing_id}", file=sys.stderr)
-        return 1
-
-    backend = _backend_for(workspace_dir)
-    backend.upsert_mailing_index(mailing_id, papers)
-    return 0
-
+# ---------------------------------------------------------------------------
+# Argument parsing and main
+# ---------------------------------------------------------------------------
 
 def main() -> int:
+    prog_name = os.path.basename(sys.argv[0]) if sys.argv else "paperflow"
+    if "paperlint" in prog_name and "paperflow" not in prog_name:
+        print(
+            "Note: 'paperlint' has been renamed to 'paperflow'. "
+            "The old name still works.",
+            file=sys.stderr,
+        )
+
     parser = argparse.ArgumentParser(
-        prog="paperlint",
-        description="Evaluate WG21 papers for mechanically verifiable defects",
+        prog="paperflow",
+        description="WG21 paper ingestion, conversion, and evaluation",
     )
     parser.add_argument(
         "-v",
@@ -532,15 +605,67 @@ def main() -> int:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # -- mailing --
+    mailing_parser = subparsers.add_parser(
+        "mailing",
+        help="Fetch mailing indexes from open-std.org (idempotent)",
+        description=(
+            "Fetch mailing indexes from open-std.org and persist locally. "
+            "With no arguments, discovers and fetches all available years. "
+            "With year arguments, fetches only those years."
+        ),
+    )
+    mailing_parser.add_argument(
+        "years",
+        nargs="*",
+        metavar="YEAR",
+        help="One or more years to fetch (e.g. 2026 2025). Omit for all years.",
+    )
+    _add_workspace_dir_arg(mailing_parser)
+
+    # -- convert --
+    convert_parser = subparsers.add_parser(
+        "convert",
+        help="Download and convert papers to markdown (no LLM)",
+        description=(
+            "Download paper source and convert to markdown. Resolves papers "
+            "from local mailing indexes (run 'paperflow mailing' first). "
+            "Accepts a bare paper id (P2900R15) or a mailing id (2026-04)."
+        ),
+    )
+    convert_parser.add_argument(
+        "target",
+        help="Paper id (P2900R15) or mailing id (2026-04)",
+    )
+    _add_workspace_dir_arg(convert_parser)
+    convert_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
+    convert_parser.add_argument("--max-workers", type=int, default=10, help="Parallel workers")
+    convert_parser.add_argument(
+        "--paper",
+        default=None,
+        metavar="PAPER",
+        help="Filter to one paper id (when target is a mailing id)",
+    )
+    convert_parser.add_argument(
+        "--papers",
+        default=None,
+        metavar="IDS",
+        help="Comma-separated paper ids to convert (when target is a mailing id)",
+    )
+
+    # -- eval --
     eval_parser = subparsers.add_parser(
         "eval",
-        help="Evaluate a single paper via the mailing index",
-        epilog=_EPILOG_EVAL,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Evaluate a single paper via the LLM pipeline",
+        description=(
+            "Evaluate a single paper. Accepts a bare paper id (P2900R15) or "
+            "a mailing/paper ref (2026-04/P2900R15). Reads paper.md and "
+            "meta.json from the workspace; run 'paperflow convert' first."
+        ),
     )
     eval_parser.add_argument(
         "paper",
-        help="Paper reference in <mailing-id>/<paper-id> form (e.g. 2026-02/P3642R4)",
+        help="Paper id (P2900R15) or eval ref (2026-04/P2900R15)",
     )
     _add_workspace_dir_arg(eval_parser)
     eval_parser.add_argument(
@@ -553,13 +678,16 @@ def main() -> int:
         ),
     )
 
+    # -- run --
     run_parser = subparsers.add_parser(
         "run",
-        help="Evaluate all papers in a mailing",
-        epilog=_EPILOG_RUN,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Evaluate all papers in a mailing via the LLM pipeline",
+        description=(
+            "Evaluate all papers in a mailing. Reads from the local mailing "
+            "index. Run 'paperflow mailing' and 'paperflow convert' first."
+        ),
     )
-    run_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
+    run_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-04)")
     _add_workspace_dir_arg(run_parser)
     run_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
     run_parser.add_argument("--max-workers", type=int, default=10, help="Parallel workers")
@@ -573,7 +701,7 @@ def main() -> int:
         "--papers",
         default=None,
         metavar="IDS",
-        help="Comma-separated paper ids to evaluate, then --max-cap (default: entire mailing list)",
+        help="Comma-separated paper ids to evaluate, then --max-cap",
     )
     run_parser.add_argument("--max-processes", type=int, default=None, help=argparse.SUPPRESS)
     run_parser.add_argument(
@@ -586,44 +714,17 @@ def main() -> int:
         ),
     )
 
-    convert_parser = subparsers.add_parser(
-        "convert",
-        help="Fetch and convert all papers in a mailing to markdown (no AI eval)",
-        epilog=_EPILOG_CONVERT,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    convert_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
-    _add_workspace_dir_arg(convert_parser)
-    convert_parser.add_argument("--max-cap", type=int, default=0, help="Max papers (0 = all)")
-    convert_parser.add_argument("--max-workers", type=int, default=10, help="Parallel workers")
-    convert_parser.add_argument(
-        "--paper",
-        default=None,
-        metavar="PAPER",
-        help="One paper id to convert (convenience; can combine with --papers)",
-    )
-    convert_parser.add_argument(
-        "--papers",
-        default=None,
-        metavar="IDS",
-        help="Comma-separated paper ids to convert, then --max-cap (default: entire mailing list)",
-    )
-
-    mailing_parser = subparsers.add_parser("mailing", help="Fetch and persist a mailing index")
-    mailing_parser.add_argument("mailing_id", help="Mailing identifier (e.g. 2026-02)")
-    _add_workspace_dir_arg(mailing_parser)
-
     args = parser.parse_args()
     configure_paperlint_console_logging(args.verbose)
 
-    if args.command == "eval":
+    if args.command == "mailing":
+        return cmd_mailing(args)
+    elif args.command == "convert":
+        return cmd_convert(args)
+    elif args.command == "eval":
         return cmd_eval(args)
     elif args.command == "run":
         return cmd_run(args)
-    elif args.command == "convert":
-        return cmd_convert(args)
-    elif args.command == "mailing":
-        return cmd_mailing(args)
     else:
         parser.print_help()
         return 1

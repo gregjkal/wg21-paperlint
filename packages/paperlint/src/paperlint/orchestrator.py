@@ -18,7 +18,6 @@ On convert or analysis failure, ``evaluation.json`` includes ``failure_stage``,
 """
 
 import hashlib
-import json
 import os
 import subprocess
 import sys
@@ -49,6 +48,7 @@ from paperlint.pipeline import (
 )
 from paperlint.suppress import step_suppress_known_fps
 from paperstore import JsonBackend, StorageBackend
+from paperstore.errors import MissingMetaError, MissingPaperMdError
 from tomd.api import convert_paper as tomd_convert_paper
 
 _PKG_ROOT = Path(__file__).resolve().parent
@@ -116,7 +116,7 @@ def convert_one_paper(
     print(f"Fetching {paper_id}...")
     paper_path = download_paper(paper_id, backend, source_url=source_url)
 
-    clean_text = tomd_convert_paper(paper_id, backend)
+    paper_md_path = tomd_convert_paper(paper_id, backend)
 
     authors = mailing_meta.get("authors", []) or []
     if isinstance(authors, str):
@@ -134,7 +134,6 @@ def convert_one_paper(
     )
 
     meta_path = backend.write_meta_json(paper_id, asdict(meta))
-    paper_md_path = backend.workspace_dir / paper_id / "paper.md" if isinstance(backend, JsonBackend) else None
 
     return {
         "paper_id": paper_id,
@@ -142,7 +141,6 @@ def convert_one_paper(
         "paper_md_path": paper_md_path,
         "meta_path": meta_path,
         "meta": meta,
-        "clean_text": clean_text,
     }
 
 
@@ -152,28 +150,33 @@ def load_converted_paper(
     workspace_dir: Path | None = None,
     storage: StorageBackend | None = None,
 ) -> tuple[str, PaperMeta]:
-    """Load ``paper.md`` and ``meta.json`` from the workspace (after ``paperlint convert``).
+    """Load the converted markdown and metadata for ``paper_id``.
+
+    Reads through the storage backend (no workspace path arithmetic);
+    eval-stage callers must have run ``paperlint convert`` first.
 
     Raises:
-        FileNotFoundError: if either file is missing or ``meta.json`` is invalid.
+        FileNotFoundError: if either the markdown or the metadata is
+            missing, or the metadata cannot be parsed.
     """
     backend = _resolve_storage(workspace_dir, storage)
-    if not isinstance(backend, JsonBackend):
-        raise TypeError("load_converted_paper requires a JsonBackend (pass workspace_dir).")
     pid = paper_id.strip().upper()
-    pdir = backend.workspace_dir / pid
-    md_path = pdir / "paper.md"
-    meta_path = pdir / "meta.json"
-    if not md_path.is_file() or not meta_path.is_file():
+    try:
+        md = backend.get_paper_md(pid)
+    except MissingPaperMdError as e:
         raise FileNotFoundError(
-            f"Missing converted paper artifacts for {pid}. "
-            f"Run: paperlint convert <mailing-id> --workspace-dir {backend.workspace_dir} "
-            f"(use --papers {pid} to convert only this paper). "
-            f"Expected {md_path} and {meta_path}."
-        )
-    raw = json.loads(meta_path.read_text(encoding="utf-8"))
-    meta = PaperMeta.from_dict(raw)
-    return md_path.read_text(encoding="utf-8"), meta
+            f"Missing converted markdown for {pid}. "
+            f"Run paperlint convert first. ({e})"
+        ) from e
+    try:
+        raw_meta = backend.get_meta(pid)
+    except MissingMetaError as e:
+        raise FileNotFoundError(
+            f"Missing metadata for {pid}. "
+            f"Run paperlint convert first. ({e})"
+        ) from e
+    meta = PaperMeta.from_dict(raw_meta)
+    return md, meta
 
 
 def _base_evaluation(

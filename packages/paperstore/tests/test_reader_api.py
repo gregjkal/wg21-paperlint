@@ -30,9 +30,8 @@ from paperstore import (
 def test_put_source_then_get_source_path_roundtrip(tmp_path: Path):
     store = JsonBackend(tmp_path)
     path = store.put_source("p1234r0", b"%PDF-1.7\n", suffix=".pdf")
-    assert path.name == "source.pdf"
-    assert path.parent.name == "P1234R0"
-    assert store.get_source_path("p1234r0") == path
+    assert path == tmp_path / "p1234r0.pdf"
+    assert store.get_source_path("P1234R0") == path
     assert path.read_bytes() == b"%PDF-1.7\n"
 
 
@@ -49,7 +48,7 @@ def test_put_source_overwrites_differing_bytes(tmp_path: Path):
     store = JsonBackend(tmp_path)
     store.put_source("p1", b"v1", suffix=".pdf")
     store.put_source("p1", b"v2", suffix=".pdf")
-    assert (tmp_path / "P1" / "source.pdf").read_bytes() == b"v2"
+    assert (tmp_path / "p1.pdf").read_bytes() == b"v2"
 
 
 def test_put_source_rejects_missing_leading_dot(tmp_path: Path):

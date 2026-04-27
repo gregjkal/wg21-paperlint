@@ -23,10 +23,9 @@ from paperlint.orchestrator import run_paper_eval
 def _write_converted(
     tmp_path: Path, paper_id: str, meta: PaperMeta, body: str = "paper body"
 ) -> None:
-    d = tmp_path / paper_id.upper()
-    d.mkdir(parents=True)
-    (d / "paper.md").write_text(body, encoding="utf-8")
-    (d / "meta.json").write_text(
+    stem = paper_id.lower()
+    (tmp_path / f"{stem}.md").write_text(body, encoding="utf-8")
+    (tmp_path / f"{stem}.meta.json").write_text(
         json.dumps(asdict(meta), ensure_ascii=False),
         encoding="utf-8",
     )

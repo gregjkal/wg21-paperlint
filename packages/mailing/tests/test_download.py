@@ -41,9 +41,9 @@ def test_download_paper_stages_pdf_under_paperstore(tmp_path: Path, monkeypatch)
         store,
         source_url="https://www.open-std.org/.../p1234r0.pdf",
     )
-    assert path == tmp_path / "P1234R0" / "source.pdf"
+    assert path == tmp_path / "p1234r0.pdf"
     assert path.read_bytes() == pdf_bytes
-    assert store.get_source_path("p1234r0") == path
+    assert store.get_source_path("P1234R0") == path
 
 
 def test_download_paper_normalizes_htm_to_html(tmp_path: Path, monkeypatch):
@@ -56,7 +56,7 @@ def test_download_paper_normalizes_htm_to_html(tmp_path: Path, monkeypatch):
         store,
         source_url="https://www.open-std.org/.../n5000.htm",
     )
-    assert path == tmp_path / "N5000" / "source.html"
+    assert path == tmp_path / "n5000.html"
 
 
 def test_download_paper_requires_source_url(tmp_path: Path):

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from paperstore.backend import StorageBackend
 from paperstore.errors import (
+    MissingEvaluationError,
     MissingMailingIndexError,
     MissingMetaError,
     MissingPaperError,
@@ -74,6 +75,7 @@ __all__ = [
     "MissingMetaError",
     "MissingSourceError",
     "MissingPaperMdError",
+    "MissingEvaluationError",
     "MissingMailingIndexError",
     "from_uri",
     "default_workspace_dir",

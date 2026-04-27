@@ -210,53 +210,16 @@ def _score(m: QAMetrics) -> tuple[int, list[str]]:
     return max(0, score), issues
 
 
-_HTML_EXTENSIONS = frozenset({".html", ".htm"})
-_PDF_EXTENSIONS = frozenset({".pdf"})
-_MD_EXTENSIONS = frozenset({".md"})
-
-
-def _qa_one(path_str: str) -> dict:
-    """Score the Markdown output for a single input.
-
-    Accepts a pre-converted ``.md`` file (scored directly), a PDF (converted
-    via the full pipeline first), or an HTML file (converted via the HTML
-    pipeline first). The CLI's ``--qa`` mode passes ``paper.md`` paths.
-    """
-    path = Path(path_str)
-    ext = path.suffix.lower()
-
+def _qa_one(item: tuple[str, str]) -> dict:
+    """Score the Markdown for a single ``(paper_id, markdown_text)`` pair."""
+    paper_id, md_text = item
     try:
-        if ext in _MD_EXTENSIONS:
-            md_text = path.read_text(encoding="utf-8")
-            m = compute_metrics(md_text, file=str(path))
-            return asdict(m)
-
-        if ext in _HTML_EXTENSIONS:
-            from ..html import convert_html
-            md_text, _ = convert_html(path)
-            m = compute_metrics(md_text, file=str(path))
-            return asdict(m)
-
-        from . import _run_pipeline
-        r = _run_pipeline(path)
-
-        if not r.readable:
-            m = QAMetrics(file=str(path),
-                          score=0, issues=["unreadable (scanned/encrypted PDF)"])
-            return asdict(m)
-
-        if r.skipped:
-            m = QAMetrics(file=str(path),
-                          score=100, issues=[f"{r.skip_reason} (skipped)"])
-            return asdict(m)
-
-        m = compute_metrics(r.md, file=str(path))
+        m = compute_metrics(md_text, file=paper_id)
         return asdict(m)
-
     except Exception as exc:
-        _log.error("Pipeline failed for %s: %s", path, exc)
-        m = QAMetrics(file=str(path), score=0,
-                      issues=[f"pipeline error: {exc}"])
+        _log.error("QA failed for %s: %s", paper_id, exc)
+        m = QAMetrics(file=paper_id, score=0,
+                      issues=[f"qa error: {exc}"])
         return asdict(m)
 
 
@@ -264,26 +227,28 @@ def _qa_metrics_from_dict(d: dict) -> QAMetrics:
     return QAMetrics(**d)
 
 
-def run_qa_report(paths: list[Path], json_path: Path | None = None,
-                  workers: int = 1, timeout: int = 120) -> None:
-    """Score a batch of inputs and print a ranked report.
+def run_qa_report(
+    items: list[tuple[str, str]],
+    json_path: Path | None = None,
+    workers: int = 1,
+    timeout: int = 120,
+) -> None:
+    """Score a batch of converted papers and print a ranked report.
 
-    *paths* may be pre-converted ``.md`` files (scored directly), PDFs, or
-    HTML files (either will be converted first). The ``--qa`` CLI passes
-    ``paper.md`` paths. Uses *workers* parallel processes (default 1 =
-    sequential); *timeout* is seconds of no progress before aborting
-    remaining files.
+    *items* is a list of ``(paper_id, markdown_text)`` pairs. Each markdown
+    string is scored independently via :func:`compute_metrics`. Uses
+    *workers* parallel processes (default 1 = sequential); *timeout* is
+    seconds of no progress before aborting remaining items.
     """
-    total = len(paths)
+    total = len(items)
     results: list[QAMetrics] = []
     t0 = time.monotonic()
 
     if workers > 1:
-        path_strs = [str(p) for p in paths]
         done_count = 0
         with ProcessPoolExecutor(max_workers=workers) as pool:
-            future_to_path = {pool.submit(_qa_one, s): s for s in path_strs}
-            pending = set(future_to_path.keys())
+            future_to_id = {pool.submit(_qa_one, it): it[0] for it in items}
+            pending = set(future_to_id.keys())
             last_completion = time.monotonic()
 
             while pending:
@@ -294,12 +259,11 @@ def run_qa_report(paths: list[Path], json_path: Path | None = None,
                     for f in newly_done:
                         pending.discard(f)
                         done_count += 1
-                        path_str = future_to_path[f]
-                        name = Path(path_str).name
+                        pid = future_to_id[f]
                         elapsed = time.monotonic() - t0
                         rate = done_count / elapsed if elapsed > 0 else 0
                         eta = (total - done_count) / rate if rate > 0 else 0
-                        print(f"\r  [{done_count}/{total}] {name:<40} "
+                        print(f"\r  [{done_count}/{total}] {pid:<40} "
                               f"{rate:.1f} files/s  ETA {eta/60:.0f}m",
                               end="", file=sys.stderr)
                         sys.stderr.flush()
@@ -308,17 +272,17 @@ def run_qa_report(paths: list[Path], json_path: Path | None = None,
                             results.append(_qa_metrics_from_dict(d))
                         except Exception as exc:
                             results.append(QAMetrics(
-                                file=path_str, score=0,
+                                file=pid, score=0,
                                 issues=[f"error: {exc}"]))
 
                 elif time.monotonic() - last_completion > timeout:
-                    timed_out = []
+                    timed_out: list[str] = []
                     for f in pending:
-                        path_str = future_to_path[f]
-                        timed_out.append(Path(path_str).name)
+                        pid = future_to_id[f]
+                        timed_out.append(pid)
                         f.cancel()
                         results.append(QAMetrics(
-                            file=path_str, score=0,
+                            file=pid, score=0,
                             issues=[f"timeout (no progress for {timeout}s)"]))
                     done_count += len(pending)
                     print(f"\n  TIMEOUT: {len(timed_out)} files aborted: "
@@ -330,20 +294,22 @@ def run_qa_report(paths: list[Path], json_path: Path | None = None,
 
             pool.shutdown(wait=False, cancel_futures=True)
     else:
-        for i, path in enumerate(paths, 1):
+        for i, item in enumerate(items, 1):
+            pid = item[0]
             elapsed = time.monotonic() - t0
             rate = i / elapsed if elapsed > 0 else 0
             eta = (total - i) / rate if rate > 0 else 0
-            print(f"\r  [{i}/{total}] {path.name:<40} "
+            print(f"\r  [{i}/{total}] {pid:<40} "
                   f"{rate:.1f} files/s  ETA {eta/60:.0f}m",
                   end="", file=sys.stderr)
             sys.stderr.flush()
-            d = _qa_one(str(path))
+            d = _qa_one(item)
             results.append(_qa_metrics_from_dict(d))
 
     wall = time.monotonic() - t0
+    avg = wall / total if total else 0.0
     print(f"\n  Finished in {wall/60:.1f} minutes "
-          f"({wall/total:.1f}s/file avg)\n", file=sys.stderr)
+          f"({avg:.1f}s/file avg)\n", file=sys.stderr)
 
     results.sort(key=lambda r: r.score)
 
@@ -375,7 +341,7 @@ def run_qa_report(paths: list[Path], json_path: Path | None = None,
         print(f"  {'Score':>5}  {'File':<40}  Issues")
         print(f"  {'-----':>5}  {'-' * 40}  {'-' * 40}")
         for r in worst:
-            name = Path(r.file).name
+            name = r.file
             if len(name) > 40:
                 name = name[:37] + "..."
             issue_str = ", ".join(r.issues) if r.issues else "ok"

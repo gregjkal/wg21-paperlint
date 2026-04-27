@@ -77,8 +77,7 @@ def _cmd_convert(
     rc = 0
     for pid in paper_ids:
         try:
-            convert_paper(pid, backend, write_prompts=write_prompts)
-            md_path = backend.workspace_dir / pid.upper() / "paper.md"
+            md_path = convert_paper(pid, backend, write_prompts=write_prompts)
             print(f"Converted {pid} -> {md_path}")
         except (MissingSourceError, MissingMetaError) as e:
             print(f"Skipping {pid}: {e}", file=sys.stderr)
@@ -99,23 +98,23 @@ def _cmd_qa(
 ) -> int:
     from tomd.lib.pdf.qa import run_qa_report
 
-    md_files: list[Path] = []
+    items: list[tuple[str, str]] = []
     for pid in paper_ids:
         try:
-            backend.get_paper_md(pid)
+            md = backend.get_paper_md(pid)
         except MissingPaperMdError:
             print(
-                f"Skipping {pid}: no paper.md. Run convert first.",
+                f"Skipping {pid}: no paper markdown. Run convert first.",
                 file=sys.stderr,
             )
             continue
-        md_files.append(backend.workspace_dir / pid.upper() / "paper.md")
+        items.append((pid.upper(), md))
 
-    if not md_files:
-        print("No markdown files available for QA.", file=sys.stderr)
+    if not items:
+        print("No markdown available for QA.", file=sys.stderr)
         return 1
 
-    run_qa_report(md_files, json_path=json_path, workers=workers, timeout=timeout)
+    run_qa_report(items, json_path=json_path, workers=workers, timeout=timeout)
     return 0
 
 
