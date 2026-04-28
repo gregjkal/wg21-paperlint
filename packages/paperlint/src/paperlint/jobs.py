@@ -104,17 +104,17 @@ async def run_mailing(
     backend: StorageBackend,
     *,
     current_year: str | None = None,
-    refresh: bool = False,
+    force: bool = False,
 ) -> dict:
     """Scrape mailing indexes from open-std.org and store in the backend.
 
     ``targets`` is a list of year strings, or ``["all"]``. Past years
     where ``backend.has_year(year)`` is True are skipped; the current year
-    is always re-fetched. Pass ``refresh=True`` to bypass the skip and
+    is always re-fetched. Pass ``force=True`` to bypass the skip and
     re-fetch every requested year. ``upsert_year`` preserves
-    ``source_file`` and ``markdown_path``, so refresh only updates mailing
-    metadata (title, authors, url, dates) without touching downloaded
-    sources or converted markdown.
+    ``source_file`` and ``markdown_path``, so a forced re-fetch only
+    updates mailing metadata (title, authors, url, dates) without touching
+    downloaded sources or converted markdown.
     """
     from mailing.scrape import discover_years, fetch_all_mailings_for_year
 
@@ -134,8 +134,8 @@ async def run_mailing(
     failed = []
 
     for year in years:
-        # Skip past years already in DB; always refresh current year.
-        if not refresh and year < current_year and backend.has_year(year):
+        # Skip past years already in DB; always re-fetch current year.
+        if not force and year < current_year and backend.has_year(year):
             skipped.append(year)
             continue
         try:
@@ -159,7 +159,7 @@ async def run_download(
     targets: list[str],
     backend: StorageBackend,
     *,
-    refetch: bool = False,
+    force: bool = False,
     verify: bool = False,
     concurrency: int = 10,
     on_total: Callable[[int], None] | None = None,
@@ -177,7 +177,7 @@ async def run_download(
     all_papers = _papers_from_scope(targets, target_type, backend)
 
     # Apply idempotency filter via SQL-equivalent: exclude already-downloaded.
-    if not refetch:
+    if not force:
         to_process = [p for p in all_papers if not p.get("source_file")]
     else:
         to_process = [p for p in all_papers if p.get("url")]
@@ -258,7 +258,7 @@ async def run_convert(
     targets: list[str],
     backend: StorageBackend,
     *,
-    refetch: bool = False,
+    force: bool = False,
     concurrency: int = 4,
 ) -> dict:
     """Convert staged source files to markdown. Workers run in threads."""
@@ -268,7 +268,7 @@ async def run_convert(
     target_type = _validate_targets(targets)
     all_papers = _papers_from_scope(targets, target_type, backend)
 
-    if not refetch:
+    if not force:
         to_process = [p for p in all_papers
                       if p.get("source_file") and not p.get("markdown_path")]
     else:
@@ -356,7 +356,7 @@ async def run_eval(
     targets: list[str],
     backend: StorageBackend,
     *,
-    refetch: bool = False,
+    force: bool = False,
     concurrency: int = 5,
     discovery_passes: int = 3,
 ) -> dict:
@@ -366,8 +366,8 @@ async def run_eval(
     target_type = _validate_targets(targets)
     all_papers = _papers_from_scope(targets, target_type, backend)
 
-    # Filter: only papers with markdown; skip already-complete unless refetch.
-    if not refetch:
+    # Filter: only papers with markdown; skip already-complete unless forced.
+    if not force:
         to_process = [
             p for p in all_papers
             if p.get("markdown_path")
@@ -418,7 +418,7 @@ async def run_full(
     targets: list[str],
     backend: StorageBackend,
     *,
-    refetch: bool = False,
+    force: bool = False,
     verify: bool = False,
     concurrency: int = 10,
     discovery_passes: int = 3,
@@ -440,17 +440,17 @@ async def run_full(
 
     if mailing_targets is not None:
         results["mailing"] = await run_mailing(
-            mailing_targets, backend, current_year=current_year
+            mailing_targets, backend, current_year=current_year, force=force
         )
 
     results["download"] = await run_download(
-        targets, backend, refetch=refetch, verify=verify, concurrency=concurrency
+        targets, backend, force=force, verify=verify, concurrency=concurrency
     )
     results["convert"] = await run_convert(
-        targets, backend, refetch=refetch, concurrency=(concurrency // 2) or 1
+        targets, backend, force=force, concurrency=(concurrency // 2) or 1
     )
     results["eval"] = await run_eval(
-        targets, backend, refetch=refetch, concurrency=concurrency,
+        targets, backend, force=force, concurrency=concurrency,
         discovery_passes=discovery_passes
     )
 

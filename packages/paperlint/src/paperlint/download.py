@@ -23,7 +23,7 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
         help="Download paper source files (PDF/HTML)",
         description=(
             "Download source files for papers. Reads URLs from the local index. "
-            "Idempotent: skips papers already staged unless --refetch is given."
+            "Idempotent: skips papers already staged unless --force is given."
         ),
     )
     p.add_argument(
@@ -33,7 +33,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
         help='Year (2026), paper id(s) (P3642R4 ...), or "all".',
     )
     p.add_argument(
-        "--refetch",
+        "--force",
+        "-f",
         action="store_true",
         help="Re-download even if source is already staged.",
     )
@@ -94,7 +95,7 @@ def command(args: argparse.Namespace, backend: StorageBackend) -> int:
         result = asyncio.run(run_download(
             args.targets,
             backend,
-            refetch=args.refetch,
+            force=args.force,
             verify=args.verify,
             concurrency=args.concurrency,
             on_total=on_total,

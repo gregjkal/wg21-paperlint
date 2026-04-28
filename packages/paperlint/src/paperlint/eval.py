@@ -32,7 +32,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
         help='Year (2026), paper id(s) (P3642R4 ...), or "all".',
     )
     p.add_argument(
-        "--refetch",
+        "--force",
+        "-f",
         action="store_true",
         help="Re-eval even if a complete evaluation already exists.",
     )
@@ -58,7 +59,7 @@ def command(args: argparse.Namespace, backend: StorageBackend) -> int:
     result = asyncio.run(run_eval(
         args.targets,
         backend,
-        refetch=args.refetch,
+        force=args.force,
         concurrency=args.concurrency,
         discovery_passes=args.discovery_passes,
     ))

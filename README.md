@@ -29,7 +29,7 @@ paperflow eval all              # evals only what's not yet complete
 
 | Flag | Commands | Description |
 |------|----------|-------------|
-| `--refetch` | download, convert, eval, full | Redo stage even if already complete |
+| `--force` / `-f` | mailing, download, convert, eval, full | Redo stage even if already complete |
 | `--verify` | download, full | HEAD-check staged files against Content-Length |
 | `--concurrency N` | download, convert, eval, full | Parallel workers (defaults vary) |
 | `--discovery-passes N` | eval, full | LLM discovery passes per paper (default: 3) |

@@ -95,13 +95,13 @@ def test_stage_mailing_picks_up_new_papers_only(store):
     assert download_calls == ["P1000R0", "P1001R0"]
 
 
-def test_stage_mailing_refetch_redownloads_all(store):
+def test_stage_mailing_force_redownloads_all(store):
     rows = _rows("P1000R0", "P1001R0")
     download_calls: list[str] = []
     fake = _fake_download(download_calls)
 
     stage_mailing("2026-01", store, fetch_papers=lambda mid: rows, download=fake)
-    counts = stage_mailing("2026-01", store, refetch=True, fetch_papers=lambda mid: rows, download=fake)
+    counts = stage_mailing("2026-01", store, force=True, fetch_papers=lambda mid: rows, download=fake)
 
     assert counts["downloaded"] == 2
     assert counts["skipped"] == 0

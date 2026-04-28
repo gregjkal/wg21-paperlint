@@ -11,7 +11,7 @@
 
 ``stage_mailing`` is the single entry point used by the CLI to fetch a
 mailing's index and download every paper's source. Re-running with no
-new papers (and no ``refetch=True``) does no network work.
+new papers (and no ``force=True``) does no network work.
 """
 
 from __future__ import annotations
@@ -32,21 +32,21 @@ def stage_mailing(
     mailing_id: str,
     store: StorageBackend,
     *,
-    refetch: bool = False,
+    force: bool = False,
     papers: set[str] | None = None,
     fetch_papers: Callable[[str], list[dict]] | None = None,
     download: Callable[..., tuple[bytes, str] | None] | None = None,
 ) -> dict:
     """Fetch a mailing's index and stage every paper's source.
 
-    Idempotent: a re-run with the same papers and ``refetch=False`` is a
+    Idempotent: a re-run with the same papers and ``force=False`` is a
     no-op for the network (the index is still upserted to refresh any
     metadata, but ``upsert_mailing_index`` preserves ``added`` timestamps).
 
     Args:
         mailing_id: e.g. ``"2026-04"``.
         store: paperstore backend rooted at the workspace.
-        refetch: if True, re-download sources even when already staged.
+        force: if True, re-download sources even when already staged.
         papers: optional uppercase paper-id filter; only these are staged.
         fetch_papers: injection seam for tests; defaults to
             ``mailing.scrape.fetch_papers_for_mailing``.
@@ -86,7 +86,7 @@ def stage_mailing(
             logger.warning("Mailing row for %s has no url; skipping download", pid)
             continue
 
-        if not refetch:
+        if not force:
             try:
                 store.get_source_path(pid)
                 counts["skipped"] += 1

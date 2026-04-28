@@ -85,7 +85,7 @@ paperflow full all                # everything not yet done
 
 `paperflow` with no verb is an alias for `full`. All commands accept year, paper-id list, or `all`. Mixing years and paper-ids in one invocation is a hard error.
 
-Flags: `--refetch`, `--verify` (download/full), `--concurrency N`, `--discovery-passes N`.
+Flags: `--force` / `-f`, `--verify` (download/full), `--concurrency N`, `--discovery-passes N`.
 
 Running `paperflow` with no arguments prints full usage including all flags.
 

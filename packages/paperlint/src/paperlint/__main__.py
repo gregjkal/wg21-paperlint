@@ -23,7 +23,7 @@ Commands:
     paperflow full all                 # full pipeline for everything
 
 Flags:
-    --refetch                  Redo stage even if already complete
+    --force / -f               Redo stage even if already complete
     --verify                   HEAD-check sources against Content-Length (download/full)
     --concurrency N            Parallel workers (default varies by command)
     --discovery-passes N       LLM discovery passes (eval/full, default 3)

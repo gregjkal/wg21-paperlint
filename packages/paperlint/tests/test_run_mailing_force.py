@@ -5,7 +5,7 @@
 # file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 #
 
-"""Tests for the ``refresh`` flag on ``paperlint.jobs.run_mailing``."""
+"""Tests for the ``force`` flag on ``paperlint.jobs.run_mailing``."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def test_run_mailing_skips_past_indexed_year_by_default(tmp_path: Path) -> None:
     assert store.list_papers_for_year("2024")[0]["title"] == "Original Title"
 
 
-def test_run_mailing_refresh_bypasses_skip_and_updates_metadata(tmp_path: Path) -> None:
+def test_run_mailing_force_bypasses_skip_and_updates_metadata(tmp_path: Path) -> None:
     store = SqliteBackend(tmp_path)
     _seed_year(store, "2024")
 
@@ -50,7 +50,7 @@ def test_run_mailing_refresh_bypasses_skip_and_updates_metadata(tmp_path: Path) 
         "mailing.scrape.fetch_all_mailings_for_year", side_effect=_fake_fetch
     ) as fetch:
         result = asyncio.run(
-            run_mailing(["2024"], store, current_year="2026", refresh=True)
+            run_mailing(["2024"], store, current_year="2026", force=True)
         )
 
     fetch.assert_called_once_with("2024")
@@ -60,7 +60,7 @@ def test_run_mailing_refresh_bypasses_skip_and_updates_metadata(tmp_path: Path) 
     assert store.list_papers_for_year("2024")[0]["title"] == "Refreshed Title"
 
 
-def test_run_mailing_refresh_preserves_source_and_markdown_paths(
+def test_run_mailing_force_preserves_source_and_markdown_paths(
     tmp_path: Path,
 ) -> None:
     """``upsert_year`` must not clobber download/conversion completion fields."""
@@ -75,7 +75,7 @@ def test_run_mailing_refresh_preserves_source_and_markdown_paths(
 
     with patch("mailing.scrape.fetch_all_mailings_for_year", side_effect=_fake_fetch):
         asyncio.run(
-            run_mailing(["2024"], store, current_year="2026", refresh=True)
+            run_mailing(["2024"], store, current_year="2026", force=True)
         )
 
     after = store.list_papers_for_year("2024")[0]
@@ -85,7 +85,7 @@ def test_run_mailing_refresh_preserves_source_and_markdown_paths(
 
 
 def test_run_mailing_current_year_always_refetches(tmp_path: Path) -> None:
-    """Refresh has no effect on the current year (already always re-fetched)."""
+    """Force has no effect on the current year (already always re-fetched)."""
     store = SqliteBackend(tmp_path)
     _seed_year(store, "2026")
 

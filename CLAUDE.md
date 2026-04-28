@@ -24,7 +24,7 @@ Per-package rules: `packages/<name>/src/<name>/CLAUDE.md`. Consult those when wo
 ```bash
 # Index fetching (only command that hits the internet for metadata)
 paperflow mailing [YEAR ...]              # fetch mailing indexes from open-std.org
-paperflow mailing [YEAR ...] --refresh    # re-fetch even years already indexed (preserves sources/markdown)
+paperflow mailing [YEAR ...] --force      # re-fetch even years already indexed (preserves sources/markdown)
 
 # Per-stage commands - each accepts one or more paper ids OR a mailing id, not both
 paperflow download P3642R4 [P2900R15 ...]  # download paper source only

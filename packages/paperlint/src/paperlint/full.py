@@ -33,7 +33,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
         help='Year (2026), paper id(s) (P3642R4 ...), or "all".',
     )
     p.add_argument(
-        "--refetch",
+        "--force",
+        "-f",
         action="store_true",
         help="Redo every stage even if already complete.",
     )
@@ -64,7 +65,7 @@ def command(args: argparse.Namespace, backend: StorageBackend) -> int:
     results = asyncio.run(run_full(
         args.targets,
         backend,
-        refetch=args.refetch,
+        force=args.force,
         verify=args.verify,
         concurrency=args.concurrency,
         discovery_passes=args.discovery_passes,

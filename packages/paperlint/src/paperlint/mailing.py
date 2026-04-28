@@ -32,7 +32,8 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
         help='Year(s) to scrape (e.g. 2026 2025), or "all" for all years >= 2011.',
     )
     p.add_argument(
-        "--refresh",
+        "--force",
+        "-f",
         action="store_true",
         help=(
             "Re-fetch even years already in the local index. Refreshes mailing "
@@ -49,7 +50,7 @@ def command(args: argparse.Namespace, backend: StorageBackend) -> int:
         return 0
 
     from paperlint.jobs import run_mailing
-    result = asyncio.run(run_mailing(args.targets, backend, refresh=args.refresh))
+    result = asyncio.run(run_mailing(args.targets, backend, force=args.force))
 
     succeeded = result.get("succeeded", [])
     skipped = result.get("skipped", [])
