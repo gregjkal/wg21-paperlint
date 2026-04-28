@@ -26,7 +26,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from paperstore.backend import StorageBackend
 from paperstore.errors import MissingMailingIndexError, MissingSourceError
@@ -157,8 +157,15 @@ async def run_download(
     refetch: bool = False,
     verify: bool = False,
     concurrency: int = 10,
+    on_total: Callable[[int], None] | None = None,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict:
-    """Download source files for papers. Workers are async httpx calls."""
+    """Download source files for papers. Workers are async httpx calls.
+
+    ``on_total`` is invoked once with the count of papers that will be
+    attempted (after idempotency filtering). ``on_progress`` is invoked
+    once per task completion with the worker's result dict.
+    """
     from mailing.download import content_length, download_paper
 
     target_type = _validate_targets(targets)
@@ -169,6 +176,12 @@ async def run_download(
         to_process = [p for p in all_papers if not p.get("source_file")]
     else:
         to_process = [p for p in all_papers if p.get("url")]
+
+    if on_total is not None:
+        try:
+            on_total(len(to_process))
+        except Exception:
+            logger.warning("on_total progress hook raised; continuing", exc_info=True)
 
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -213,6 +226,12 @@ async def run_download(
             skipped_papers.append(result)
         else:
             failed.append(result)
+        if on_progress is not None:
+            try:
+                on_progress(result)
+            except Exception:
+                logger.warning("on_progress progress hook raised; disabling for remainder of run", exc_info=True)
+                on_progress = None
 
     return {"succeeded": succeeded, "skipped": skipped_papers, "failed": failed}
 
