@@ -104,12 +104,17 @@ async def run_mailing(
     backend: StorageBackend,
     *,
     current_year: str | None = None,
+    refresh: bool = False,
 ) -> dict:
     """Scrape mailing indexes from open-std.org and store in the backend.
 
     ``targets`` is a list of year strings, or ``["all"]``. Past years
     where ``backend.has_year(year)`` is True are skipped; the current year
-    is always re-fetched.
+    is always re-fetched. Pass ``refresh=True`` to bypass the skip and
+    re-fetch every requested year. ``upsert_year`` preserves
+    ``source_file`` and ``markdown_path``, so refresh only updates mailing
+    metadata (title, authors, url, dates) without touching downloaded
+    sources or converted markdown.
     """
     from mailing.scrape import discover_years, fetch_all_mailings_for_year
 
@@ -130,7 +135,7 @@ async def run_mailing(
 
     for year in years:
         # Skip past years already in DB; always refresh current year.
-        if year < current_year and backend.has_year(year):
+        if not refresh and year < current_year and backend.has_year(year):
             skipped.append(year)
             continue
         try:
