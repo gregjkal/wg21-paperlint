@@ -53,7 +53,7 @@ def strip_format_chars(text: str) -> str:
     return "".join(c for c in text if c not in FORMAT_CHARS)
 
 
-FRONT_MATTER_ORDER = ("title", "document", "date", "audience", "reply-to")
+FRONT_MATTER_ORDER = ("title", "document", "date", "intent", "audience", "reply-to")
 
 _TITLE_LABEL_RE = re.compile(
     r"(?:Paper\s*Number|Document(?:\s*Number)?|Title|Authors?|"
@@ -135,23 +135,38 @@ def _yaml_value(key: str, val) -> str:
 
 
 def format_front_matter(metadata: dict) -> str:
-    """Format metadata dict as YAML front matter.
+    """Format metadata dict as YAML front matter in strict canonical order.
 
-    Field order: title, document, date, audience, reply-to.
+    Strict-order contract: keys are emitted exactly in the order
+    ``title, document, date, intent, audience, reply-to``. Missing keys
+    are skipped (no placeholders, no blank lines). Unknown keys appear
+    after ``audience`` so ``reply-to`` is always last. Callers and
+    downstream tools may rely on this ordering for diffs and parsing.
+
     Title and values containing YAML-special characters are double-quoted
     with backslash-escaping for embedded quotes, backslashes, and newlines.
-    Reply-to is a YAML list of double-quoted strings.
-    Returns empty string if metadata is empty.
+    Reply-to is a YAML list of double-quoted strings. Returns the empty
+    string when ``metadata`` is empty.
     """
     if not metadata:
         return ""
     lines = ["---"]
+    pre_reply_to: list[str] = []
+    reply_to_line: str | None = None
     for key in FRONT_MATTER_ORDER:
-        if key in metadata:
-            lines.append(_yaml_value(key, metadata[key]))
+        if key not in metadata:
+            continue
+        rendered = _yaml_value(key, metadata[key])
+        if key == "reply-to":
+            reply_to_line = rendered
+        else:
+            pre_reply_to.append(rendered)
+    lines.extend(pre_reply_to)
     for key, val in metadata.items():
         if key not in FRONT_MATTER_ORDER:
             lines.append(_yaml_value(key, val))
+    if reply_to_line is not None:
+        lines.append(reply_to_line)
     lines.append("---")
     return "\n".join(lines)
 

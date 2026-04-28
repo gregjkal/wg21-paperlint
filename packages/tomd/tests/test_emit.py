@@ -90,6 +90,70 @@ def test_front_matter_special_chars_quoted():
     assert '"SG1: Concurrency"' in result
 
 
+def test_front_matter_canonical_order():
+    """All six known keys come out in strict canonical order regardless of input order."""
+    from tomd.lib import format_front_matter
+    meta = {
+        "reply-to": ["Alice <a@x>"],
+        "audience": "LEWG",
+        "intent": "info",
+        "date": "2026-04-28",
+        "document": "P9999R0",
+        "title": "Canonical Test",
+    }
+    result = format_front_matter(meta)
+    expected = (
+        "---\n"
+        "title: Canonical Test\n"
+        "document: P9999R0\n"
+        "date: 2026-04-28\n"
+        "intent: info\n"
+        "audience: LEWG\n"
+        "reply-to:\n"
+        '  - "Alice <a@x>"\n'
+        "---"
+    )
+    assert result == expected
+
+
+def test_front_matter_intent_position():
+    """`intent` lands between `date` and `audience`."""
+    from tomd.lib import format_front_matter
+    result = format_front_matter({
+        "title": "T",
+        "date": "2026-04-28",
+        "intent": "ask",
+        "audience": "LWG",
+    })
+    title_pos = result.index("title:")
+    date_pos = result.index("date:")
+    intent_pos = result.index("intent:")
+    audience_pos = result.index("audience:")
+    assert title_pos < date_pos < intent_pos < audience_pos
+
+
+def test_front_matter_skips_missing_keys():
+    """Missing keys produce no placeholders and no blank lines."""
+    from tomd.lib import format_front_matter
+    result = format_front_matter({"title": "T", "document": "P1R0"})
+    assert result == "---\ntitle: T\ndocument: P1R0\n---"
+
+
+def test_front_matter_unknown_keys_keep_reply_to_last():
+    """Unknown keys land after canonical scalars; reply-to stays last."""
+    from tomd.lib import format_front_matter
+    result = format_front_matter({
+        "title": "T",
+        "audience": "LWG",
+        "reply-to": ["X <x@y>"],
+        "paper-type": "proposal",
+    })
+    audience_pos = result.index("audience:")
+    paper_type_pos = result.index("paper-type:")
+    reply_to_pos = result.index("reply-to:")
+    assert audience_pos < paper_type_pos < reply_to_pos
+
+
 def test_emit_list():
     from tomd.lib.pdf.types import Span, Line
     span = make_span("- item one")

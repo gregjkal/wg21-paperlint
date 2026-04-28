@@ -96,6 +96,41 @@ The output Markdown must be clean and readable:
 - WG21 metadata block becomes YAML front matter
 - Collapse multiple spaces, replace non-breaking spaces, normalize whitespace
 
+## Front Matter Strict Order (Contract)
+
+Every markdown produced by `convert_paper` has its YAML front matter
+emitted in this exact key order:
+
+1. `title`
+2. `document`
+3. `date`
+4. `intent`
+5. `audience`
+6. `reply-to`
+
+This is an output contract. Callers, golden fixtures, diffs, and
+downstream parsers may rely on it. Rules:
+
+- Missing keys are skipped (no placeholders, no blank lines).
+- Unknown keys (rare) appear after `audience` so `reply-to` is always last.
+- The order is enforced by `_canonicalize_front_matter` in `api.py`,
+  which runs after `_apply_metadata_fallback`. It parses whatever
+  front matter the converter (PDF or HTML) produced - regardless of
+  source key order - and re-emits via `format_front_matter` from
+  `lib/__init__.py`, the single source of truth for ordering
+  (`FRONT_MATTER_ORDER`).
+- The HTML converter and PDF emitter both call `format_front_matter`
+  directly, so well-behaved sources are already canonical at emit
+  time; the canonicalize pass exists to defend against papers whose
+  embedded front matter (mpark/bikeshed) ships fields in arbitrary
+  order, and against the metadata-fallback path that appends fields
+  after the body.
+
+If you change `FRONT_MATTER_ORDER`, update this section, the
+`format_front_matter` and `convert_paper` docstrings, and the related
+unit tests in `tests/test_emit.py` and `tests/test_paper_extract.py`
+in the same commit.
+
 ## LLM Integration (v2)
 
 Auto-resolution via `--llm` flag is deferred to v2. For v1, the tool produces a companion `<pid>.prompts.json` file: a JSON array where each element is a complete LLM prompt the operator can paste into any LLM verbatim. One element per uncertain region (plus one per flagged wording-detection issue).
@@ -103,8 +138,8 @@ Auto-resolution via `--llm` flag is deferred to v2. For v1, the tool produces a 
 ## File Map
 
 - `__main__.py` - CLI entry point. Argparse + paperstore-backed `convert_paper` invocation. Takes a paper id and a workspace dir; supports `--qa` mode with `--qa-json`, `--workers`, and `--timeout` flags for batch quality scoring. The pre-0.2 file-path interface (`tomd input.pdf`) is removed; sources must be staged via `mailing` first.
-- `api.py` - Public API. `convert_paper(paper_id, store, *, write_prompts=True) -> Path` reads the staged source + mailing-index row through paperstore, dispatches by suffix to `lib.pdf.convert_pdf` / `lib.html.convert_html`, applies YAML front-matter fallback from the mailing row, strips TOC blocks, writes the markdown (and an optional `<pid>.prompts.json` intermediate, a JSON array of LLM reconcile prompts) back through the store, and returns the path of the written markdown.
-- `lib/__init__.py` - Shared text utilities and constants for PDF and HTML converters: `ascii_escape` (kept for external use, no longer called in pipeline), `strip_format_chars`, `format_front_matter`, `parse_author_lines`, `ALLOWED_LINK_SCHEMES`, shared regex patterns (`EMAIL_RE`, `DATE_RE`, `DOC_NUM_RE`, `SECTION_NUM_PREFIX_RE`), and their reusable shape strings (`DOC_NUM_PATTERN`, `SECTION_NUM_PATTERN`) consumed by `lib/pdf/types.py` to build `DOC_FIELD_RE` and `SECTION_NUM_RE`.
+- `api.py` - Public API. `convert_paper(paper_id, store, *, write_prompts=True) -> Path` reads the staged source + mailing-index row through paperstore, dispatches by suffix to `lib.pdf.convert_pdf` / `lib.html.convert_html`, applies YAML front-matter fallback from the mailing row, runs `_canonicalize_front_matter` to enforce strict canonical key order, strips TOC blocks, writes the markdown (and an optional `<pid>.prompts.json` intermediate, a JSON array of LLM reconcile prompts) back through the store, and returns the path of the written markdown.
+- `lib/__init__.py` - Shared text utilities and constants for PDF and HTML converters: `ascii_escape` (kept for external use, no longer called in pipeline), `strip_format_chars`, `format_front_matter` (emits keys in the strict canonical order from `FRONT_MATTER_ORDER`: `title, document, date, intent, audience, reply-to`, with unknown keys after `audience` so `reply-to` stays last), `parse_author_lines`, `ALLOWED_LINK_SCHEMES`, shared regex patterns (`EMAIL_RE`, `DATE_RE`, `DOC_NUM_RE`, `SECTION_NUM_PREFIX_RE`), and their reusable shape strings (`DOC_NUM_PATTERN`, `SECTION_NUM_PATTERN`) consumed by `lib/pdf/types.py` to build `DOC_FIELD_RE` and `SECTION_NUM_RE`.
 - `lib/similarity.py` - Dual-algorithm string similarity (SequenceMatcher + Jaccard). Per-algorithm thresholds, 200-char circuit breaker. Format-agnostic.
 - `lib/toc.py` - Table of Contents detection. Primary path: exact-match set lookup against known headings (O(1) per section). Fuzzy fallback (SequenceMatcher + Jaccard) only when heading count is below `_MAX_FUZZY_HEADINGS` (200). Fallback structural-hints path for headingless wording-only papers. Bridges small gaps. Format-agnostic.
 - `lib/pdf/__init__.py` - Exports `convert_pdf()` and `PipelineResult`. Orchestrates the full pipeline via `_run_pipeline()` which returns all intermediate data including skip status. Early exits: `_is_slide_deck` (landscape + small pages), `_is_standards_draft` (>= 200 pages). Includes monospace propagation, wording classification, page 0 color extraction via space-color proxy, and `_toc_structural_hints()` for headingless wording papers. Output is UTF-8 Unicode.

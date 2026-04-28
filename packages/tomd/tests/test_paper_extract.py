@@ -133,7 +133,7 @@ class TestMetadataFallback:
         )
         _patch_html(monkeypatch, body)
         md = _convert_and_read(store, "P1")
-        assert '"Source Title"' in md
+        assert "title: Source Title" in md
         assert "Mailing Title" not in md
         assert "audience: LWG" in md
 
@@ -148,6 +148,69 @@ class TestMetadataFallback:
         assert "title: T" in md
         assert "audience:" not in md
         assert "reply-to:" not in md
+
+
+class TestCanonicalFrontMatterOrder:
+    def test_source_order_is_normalized(self, tmp_path: Path, monkeypatch):
+        """Source front matter in arbitrary order is rewritten in canonical order."""
+        store = SqliteBackend(tmp_path)
+        _stage(store, "P1", suffix=".html", mailing_row={"title": "Mailing T"})
+        body = (
+            "---\n"
+            "reply-to:\n"
+            '  - "Alice <a@x>"\n'
+            "audience: LEWG\n"
+            "intent: info\n"
+            "date: 2026-04-28\n"
+            "document: P1R0\n"
+            "title: Out Of Order\n"
+            "---\n\n"
+            "Body.\n"
+        )
+        _patch_html(monkeypatch, body)
+        md = _convert_and_read(store, "P1")
+        front, _, _ = md.partition("\n---\n")
+        front += "\n---"
+        expected = (
+            "---\n"
+            "title: Out Of Order\n"
+            "document: P1R0\n"
+            "date: 2026-04-28\n"
+            "intent: info\n"
+            "audience: LEWG\n"
+            "reply-to:\n"
+            '  - "Alice <a@x>"\n'
+            "---"
+        )
+        assert front == expected
+
+    def test_fallback_lands_in_canonical_order(self, tmp_path: Path, monkeypatch):
+        """Mailing-row fallback fields land in canonical positions, not at the end."""
+        store = SqliteBackend(tmp_path)
+        _stage(
+            store, "P9999R0", suffix=".html",
+            mailing_row={
+                "title": "Carry-less product",
+                "subgroup": "LEWG",
+                "authors": ["Alice <a@x>"],
+                "document_date": "2026-02-15",
+            },
+        )
+        body = (
+            "---\n"
+            "intent: info\n"
+            "---\n\n"
+            "Body.\n"
+        )
+        _patch_html(monkeypatch, body)
+        md = _convert_and_read(store, "P9999R0")
+        title_pos = md.index("title:")
+        document_pos = md.index("document:")
+        date_pos = md.index("date:")
+        intent_pos = md.index("intent:")
+        audience_pos = md.index("audience:")
+        reply_to_pos = md.index("reply-to:")
+        assert title_pos < document_pos < date_pos < intent_pos < audience_pos < reply_to_pos
 
 
 class TestErrors:

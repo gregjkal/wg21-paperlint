@@ -19,6 +19,12 @@ work without changes here.
 YAML front-matter fallback lives here: whatever tomd could not extract
 from the source paper is filled in from the mailing-index row for the
 paper. Fields already present in the paper's front matter win.
+
+The returned markdown's front matter is always emitted in the strict
+canonical key order ``title, document, date, intent, audience, reply-to``
+(unknown keys after ``audience``, ``reply-to`` always last), regardless
+of the source format or the order in which fallback fields were merged.
+A final ``_canonicalize_front_matter`` pass enforces this invariant.
 """
 
 from __future__ import annotations
@@ -27,7 +33,7 @@ import re
 import sys
 from pathlib import Path
 
-from tomd.lib import sanitize_metadata, FRONT_MATTER_ORDER
+from tomd.lib import format_front_matter, sanitize_metadata
 from tomd.lib.html import convert_html
 from tomd.lib.pdf import convert_pdf
 
@@ -129,6 +135,105 @@ def _apply_metadata_fallback(md: str, mailing_meta: dict | None) -> str:
     if new_body:
         return f"---\n{new_body}\n---\n\n{rest.lstrip()}"
     return md
+
+
+_LIST_ITEM_RE = re.compile(r"^\s+-\s+(.*)$")
+
+
+def _unquote_yaml_scalar(s: str) -> str:
+    """Strip surrounding double-quotes and resolve YAML backslash escapes."""
+    if len(s) < 2 or s[0] != '"' or s[-1] != '"':
+        return s
+    inner = s[1:-1]
+    out: list[str] = []
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch == "\\" and i + 1 < len(inner):
+            nxt = inner[i + 1]
+            if nxt == "n":
+                out.append("\n")
+            elif nxt in ('"', "\\"):
+                out.append(nxt)
+            else:
+                out.append(nxt)
+            i += 2
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
+def _parse_front_matter_body(body: str) -> dict:
+    """Parse a YAML front-matter body into a dict.
+
+    Recognizes the two shapes tomd emits: ``key: value`` (optionally
+    double-quoted) and ``key:`` followed by indented ``- "item"`` lines.
+    Anything else is dropped. Sufficient for round-tripping tomd's own
+    front matter through ``format_front_matter``.
+    """
+    parsed: dict = {}
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+        if line.startswith((" ", "\t", "-")):
+            i += 1
+            continue
+        head, sep, tail = line.partition(":")
+        if not sep:
+            i += 1
+            continue
+        key = head.strip()
+        value = tail.strip()
+        if value:
+            parsed[key] = _unquote_yaml_scalar(value)
+            i += 1
+            continue
+        items: list[str] = []
+        j = i + 1
+        while j < len(lines):
+            item_line = lines[j]
+            if not item_line.strip():
+                j += 1
+                continue
+            m = _LIST_ITEM_RE.match(item_line)
+            if not m:
+                break
+            items.append(_unquote_yaml_scalar(m.group(1).strip()))
+            j += 1
+        if items:
+            parsed[key] = items
+            i = j
+        else:
+            i += 1
+    return parsed
+
+
+def _canonicalize_front_matter(md: str) -> str:
+    """Re-emit front matter in strict canonical key order.
+
+    Parses the existing YAML front-matter body, rebuilds it via
+    ``format_front_matter`` so keys appear in ``FRONT_MATTER_ORDER``
+    (with unknown keys after ``audience`` and ``reply-to`` last), and
+    splices it back in. Returns ``md`` unchanged when there is no
+    front matter or when the body parses to nothing.
+    """
+    match = _FRONT_MATTER_RE.match(md)
+    if not match:
+        return md
+    parsed = _parse_front_matter_body(match.group("body"))
+    if not parsed:
+        return md
+    new_block = format_front_matter(parsed)
+    if not new_block:
+        return md
+    rest = md[match.end():]
+    return f"{new_block}\n\n{rest.lstrip()}"
 
 
 _METADATA_TABLE_LINE_RE = re.compile(
@@ -292,9 +397,15 @@ def convert_paper(
 
     All inputs are pre-fetched by the caller. Reads ``source_path`` from
     disk, runs the appropriate converter, applies YAML front-matter
-    fallback from ``meta``, strips TOC blocks, and returns the result.
-    The caller is responsible for persisting the markdown (and optional
-    prompts) through the storage backend.
+    fallback from ``meta``, canonicalizes front-matter key order, strips
+    TOC blocks, and returns the result. The caller is responsible for
+    persisting the markdown (and optional prompts) through the storage
+    backend.
+
+    The returned markdown's YAML front matter is guaranteed to use the
+    strict canonical key order ``title, document, date, intent,
+    audience, reply-to``. Missing keys are skipped; unknown keys are
+    placed after ``audience`` so ``reply-to`` is always last.
 
     Returns ``(markdown, prompts, extracted_intent)``:
 
@@ -324,6 +435,7 @@ def convert_paper(
 
     md = _sanitize_front_matter(md)
     md = _apply_metadata_fallback(md, meta)
+    md = _canonicalize_front_matter(md)
     md = _strip_body_metadata_text(md)
     md = _strip_toc(md)
 
