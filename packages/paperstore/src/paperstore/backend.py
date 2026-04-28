@@ -36,7 +36,19 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def upsert_year(self, year: str, papers: list[dict]) -> list[dict]:
-        """Insert or update all ``papers`` for ``year``. Returns merged list."""
+        """Insert or update all ``papers`` for ``year``.
+
+        Each entry is matched by uppercased ``paper_id``. New rows are
+        inserted; existing rows have their metadata fields overwritten
+        (title, authors, target_group, url, document_date, mailing_date),
+        while completion-state columns set by ``put_source`` /
+        ``write_paper_md`` (``source_file``, ``markdown_path``) are
+        preserved. Rows already present for ``year`` but absent from
+        ``papers`` are retained, not deleted.
+
+        Returns the full set of paper rows for ``year`` after merging,
+        in unspecified order.
+        """
 
     @abstractmethod
     def list_papers_for_year(self, year: str) -> list[dict]:
@@ -73,16 +85,61 @@ class StorageBackend(ABC):
         """Persist the converted markdown. Atomic write. Returns path."""
 
     @abstractmethod
-    def write_meta_json(self, paper_id: str, meta: dict) -> Any:
-        """Persist per-paper metadata (upsert)."""
+    def write_meta_json(self, paper_id: str, meta: dict) -> Path:
+        """Merge ``meta`` into the paper row.
+
+        Only keys present in ``meta`` are written; columns set by
+        ``put_source`` / ``write_paper_md`` are preserved when omitted.
+        Returns a local path callers can use for legacy on-disk meta.json
+        compatibility.
+        """
 
     @abstractmethod
-    def write_evaluation_json(self, paper_id: str, evaluation: dict) -> Any:
-        """Persist the per-paper evaluation deliverable."""
+    def write_evaluation_json(self, paper_id: str, evaluation: dict) -> Path:
+        """Persist the per-paper evaluation deliverable. Returns the file path."""
 
     @abstractmethod
-    def write_intermediate(self, paper_id: str, name: str, payload: Any) -> Any:
-        """Persist a labeled intermediate artifact (e.g. ``1-findings``)."""
+    def write_intermediate(self, paper_id: str, name: str, payload: Any) -> Path:
+        """Persist a labeled intermediate artifact (e.g. ``1-findings``).
+
+        Returns the file path.
+        """
+
+    @abstractmethod
+    def record_source(self, paper_id: str, path: Path | str) -> None:
+        """Stamp ``path`` as the staged source file for ``paper_id`` in the index.
+
+        For callers that already wrote the file by other means (e.g., a
+        download worker that returns a Path). Atomically inserts the row
+        if absent and sets ``source_file``. Does not touch the filesystem.
+        """
+
+    @abstractmethod
+    def record_markdown(
+        self, paper_id: str, path: Path | str, *, intent: str | None = None
+    ) -> None:
+        """Stamp ``path`` as the converted markdown for ``paper_id`` in the index.
+
+        Optionally also records ``intent`` (the YAML-front-matter signal
+        from tomd). See :meth:`record_source` for the file-already-written
+        use case.
+        """
+
+    @abstractmethod
+    def reconcile(self) -> dict[str, int]:
+        """Backfill DB rows from on-disk artifacts. Non-destructive.
+
+        Scans the workspace for known artifact filenames (sources,
+        markdowns, evaluations) and fills the corresponding DB columns
+        for any file that isn't currently indexed. Existing non-empty
+        values are preserved.
+
+        Returns counts of newly-indexed artifacts:
+        ``{"sources": N, "markdowns": M, "evaluations": K}``.
+        Useful as a recovery tool when the DB is lost or out of sync
+        with the workspace, and as the basis for an admin/management
+        command.
+        """
 
     # ---- reads ------------------------------------------------------------
 
@@ -116,6 +173,16 @@ class StorageBackend(ABC):
 
         Raises:
             paperstore.MissingEvaluationError: evaluation not written.
+        """
+
+    @abstractmethod
+    def get_eval_status(self, paper_id: str) -> str | None:
+        """Return ``pipeline_status`` for ``paper_id`` without reading the JSON.
+
+        Returns ``None`` if no evals row exists OR the row's status is
+        empty (the two are indistinguishable to callers). Cheap relative
+        to :meth:`get_evaluation`: a single column read, no file I/O. Use
+        for idempotency filters that only need to know completeness.
         """
 
     # ---- legacy aliases (JsonBackend compat; removed in SqliteBackend) ----

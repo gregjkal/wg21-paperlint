@@ -7,11 +7,7 @@
 # Official repository: https://github.com/cppalliance/paperlint
 #
 
-"""Paperstore CLI: inspect what's stored under a workspace.
-
-Read-only. Useful during development to confirm what mailing, tomd, and
-paperlint have written. No network calls, no writes.
-"""
+"""Paperstore CLI: inspect (and reconcile) what's stored under a workspace."""
 
 from __future__ import annotations
 
@@ -112,10 +108,24 @@ def _cmd_show_paper(backend: SqliteBackend, paper_id: str) -> int:
     return 0
 
 
+def _cmd_reconcile(backend: SqliteBackend) -> int:
+    counts = backend.reconcile()
+    print(
+        f"Backfilled: {counts['sources']} sources, "
+        f"{counts['markdowns']} markdowns, "
+        f"{counts['evaluations']} evaluations."
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="paperstore",
-        description="Inspect paperflow artifacts in a workspace directory.",
+        description=(
+            "Inspect paperflow artifacts in a workspace directory. "
+            "The 'reconcile' subcommand backfills DB rows from on-disk "
+            "artifacts (non-destructive); all other commands are read-only."
+        ),
     )
     parser.add_argument(
         "--workspace-dir",
@@ -140,17 +150,23 @@ def main() -> int:
     show_p = sub.add_parser("show-paper", help="Print a paper's metadata JSON.")
     show_p.add_argument("paper_id")
 
-    args = parser.parse_args()
-    backend = SqliteBackend(args.workspace_dir)
+    sub.add_parser(
+        "reconcile",
+        help="Backfill DB rows from on-disk artifacts (non-destructive).",
+    )
 
-    if args.command == "list-years":
-        return _cmd_list_years(backend)
-    if args.command == "show-year":
-        return _cmd_show_year(backend, args.year)
-    if args.command == "ls-papers":
-        return _cmd_ls_papers(backend, args.year)
-    if args.command == "show-paper":
-        return _cmd_show_paper(backend, args.paper_id)
+    args = parser.parse_args()
+    with SqliteBackend(args.workspace_dir) as backend:
+        if args.command == "list-years":
+            return _cmd_list_years(backend)
+        if args.command == "show-year":
+            return _cmd_show_year(backend, args.year)
+        if args.command == "ls-papers":
+            return _cmd_ls_papers(backend, args.year)
+        if args.command == "show-paper":
+            return _cmd_show_paper(backend, args.paper_id)
+        if args.command == "reconcile":
+            return _cmd_reconcile(backend)
     parser.print_help()
     return 1
 

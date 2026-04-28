@@ -23,6 +23,7 @@ import json
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,6 @@ CREATE TABLE IF NOT EXISTS years (
 CREATE TABLE IF NOT EXISTS evals (
     paper_id            TEXT PRIMARY KEY REFERENCES papers(paper_id),
     pipeline_status     TEXT DEFAULT '',
-    eval_timestamp      TEXT DEFAULT '',
     model               TEXT DEFAULT '',
     findings_discovered INTEGER,
     findings_passed     INTEGER,
@@ -87,6 +87,14 @@ class SqliteBackend(StorageBackend):
     Constructor creates ``workspace_dir`` and ``papers.db`` on first use.
     All read/write methods are synchronous and not thread-safe; call only
     from the main event-loop coroutine.
+
+    Atomicity model: files are the source of truth, the DB is an index.
+    Each writer first lands the artifact via an atomic ``.partial`` rename,
+    then commits the matching DB row inside a single transaction
+    (``with self._conn:``). The window between those two steps is brief but
+    non-zero: a crash there leaves a complete file with a stale or absent
+    row. Recovery is simply to re-run the operation; the pipeline is
+    idempotent and the next call rewrites both file and row cleanly.
     """
 
     def __init__(self, workspace_dir: Path) -> None:
@@ -102,16 +110,53 @@ class SqliteBackend(StorageBackend):
     def workspace_dir(self) -> Path:
         return self._workspace
 
+    def close(self) -> None:
+        """Close the underlying sqlite3 connection. Idempotent."""
+        conn = getattr(self, "_conn", None)
+        if conn is not None:
+            conn.close()
+            self._conn = None  # type: ignore[assignment]
+
+    def __enter__(self) -> "SqliteBackend":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     # ---- internal helpers -------------------------------------------------
 
-    def _patch_fields(self, paper_id: str, fields: dict) -> None:
-        """Update specific columns on the papers row for ``paper_id``."""
-        if not fields:
-            return
-        cols = ", ".join(f"{k} = ?" for k in fields)
-        vals = list(fields.values()) + [paper_id.upper()]
-        self._conn.execute(f"UPDATE papers SET {cols} WHERE paper_id = ?", vals)
-        self._conn.commit()
+    def _atomic_write_bytes(self, path: Path, content: bytes) -> Path:
+        """Write ``content`` to ``path`` via a sibling ``.partial`` file.
+
+        Uses ``<name>.partial`` (not ``<stem>.tmp.<suffix>``) so a stale
+        temp file isn't mistaken for a real artifact by workspace-scanning
+        callers. Cleans up the temp file on failure.
+        """
+        temp_path = path.with_name(path.name + ".partial")
+        try:
+            temp_path.write_bytes(content)
+            _atomic_replace(temp_path, path)
+        except Exception:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
+        return path
+
+    def _atomic_write_text(self, path: Path, content: str) -> Path:
+        """UTF-8 text counterpart to :meth:`_atomic_write_bytes`."""
+        temp_path = path.with_name(path.name + ".partial")
+        try:
+            temp_path.write_text(content, encoding="utf-8")
+            _atomic_replace(temp_path, path)
+        except Exception:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+            raise
+        return path
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict:
         d = dict(row)
@@ -136,7 +181,6 @@ class SqliteBackend(StorageBackend):
 
     def upsert_year(self, year: str, papers: list[dict]) -> list[dict]:
         """Insert or update all papers for year. Returns merged list."""
-        from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             "INSERT OR IGNORE INTO years (year, added) VALUES (?, ?)",
@@ -223,113 +267,209 @@ class SqliteBackend(StorageBackend):
 
     def put_source(self, paper_id: str, content: bytes, *, suffix: str) -> Path:
         """Write source bytes atomically and record the path in the DB."""
+        if not suffix.startswith("."):
+            raise ValueError(
+                f"put_source: suffix must start with '.' (got {suffix!r})"
+            )
         pid = paper_id.strip().upper()
-        final_path = self._workspace / f"{pid.lower()}{suffix}"
-        temp_path = final_path.with_stem(final_path.stem + ".tmp")
-        if temp_path.exists():
-            temp_path.unlink()
-        temp_path.write_bytes(content)
-        _atomic_replace(temp_path, final_path)
-        # Ensure row exists before patching.
-        self._conn.execute(
-            "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+        final_path = self._atomic_write_bytes(
+            self._workspace / f"{pid.lower()}{suffix}", content
         )
-        self._conn.commit()
-        self._patch_fields(pid, {"source_file": str(final_path)})
+        self.record_source(pid, final_path)
         return final_path
 
     def write_paper_md(self, paper_id: str, markdown: str) -> Path:
         """Write markdown atomically and record the path in the DB."""
         pid = paper_id.strip().upper()
-        final_path = self._workspace / f"{pid.lower()}.md"
-        temp_path = final_path.with_stem(final_path.stem + ".tmp")
-        if temp_path.exists():
-            temp_path.unlink()
-        temp_path.write_text(markdown, encoding="utf-8")
-        _atomic_replace(temp_path, final_path)
-        self._conn.execute(
-            "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+        final_path = self._atomic_write_text(
+            self._workspace / f"{pid.lower()}.md", markdown
         )
-        self._conn.commit()
-        self._patch_fields(pid, {"markdown_path": str(final_path)})
+        self.record_markdown(pid, final_path)
         return final_path
 
     def write_meta_json(self, paper_id: str, meta: dict) -> Path:
-        """Upsert paper metadata into the papers table."""
+        """Merge ``meta`` into the papers row, leaving omitted columns untouched.
+
+        Only columns explicitly present in ``meta`` are written, so callers
+        that omit ``source_file`` / ``markdown_path`` will not clobber values
+        previously set by ``put_source`` / ``write_paper_md``.
+        """
         pid = paper_id.strip().upper()
-        authors = meta.get("authors") or []
-        if isinstance(authors, list):
-            authors_json = json.dumps(authors)
-        else:
-            authors_json = str(authors)
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO papers
-                (paper_id, year, title, authors, target_group, intent,
-                 url, document_date, mailing_date, source_file, markdown_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                pid,
-                meta.get("year") or "",
-                meta.get("title") or "",
-                authors_json,
-                meta.get("target_group") or "",
-                meta.get("intent") or "",
-                meta.get("url") or "",
-                meta.get("document_date") or "",
-                meta.get("mailing_date") or "",
-                meta.get("source_file") or "",
-                meta.get("markdown_path") or "",
-            ),
-        )
-        self._conn.commit()
+        column_map = {
+            "year": "year",
+            "title": "title",
+            "target_group": "target_group",
+            "intent": "intent",
+            "url": "url",
+            "document_date": "document_date",
+            "mailing_date": "mailing_date",
+            "source_file": "source_file",
+            "markdown_path": "markdown_path",
+        }
+        fields: dict[str, Any] = {}
+        for key, col in column_map.items():
+            if key in meta:
+                value = meta[key]
+                fields[col] = "" if value is None else value
+        if "authors" in meta:
+            authors = meta.get("authors") or []
+            fields["authors"] = (
+                json.dumps(authors) if isinstance(authors, list) else str(authors)
+            )
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+            )
+            if fields:
+                cols = ", ".join(f"{k} = ?" for k in fields)
+                vals = list(fields.values()) + [pid]
+                self._conn.execute(
+                    f"UPDATE papers SET {cols} WHERE paper_id = ?", vals
+                )
         return self._workspace / f"{pid.lower()}.meta.json"  # compat path
 
     def write_evaluation_json(self, paper_id: str, evaluation: dict) -> Path:
         """Write eval JSON to disk and upsert summary into evals table."""
         pid = paper_id.strip().upper()
-        final_path = self._workspace / f"{pid.lower()}.eval.json"
-        temp_path = final_path.with_stem(final_path.stem + ".tmp")
-        if temp_path.exists():
-            temp_path.unlink()
-        temp_path.write_text(
-            json.dumps(evaluation, indent=2, ensure_ascii=False), encoding="utf-8"
+        final_path = self._atomic_write_text(
+            self._workspace / f"{pid.lower()}.eval.json",
+            json.dumps(evaluation, indent=2, ensure_ascii=False),
         )
-        _atomic_replace(temp_path, final_path)
 
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO evals
-                (paper_id, pipeline_status, eval_timestamp, model,
-                 findings_discovered, findings_passed, findings_rejected,
-                 summary, generated, eval_json_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                pid,
-                evaluation.get("pipeline_status") or "",
-                evaluation.get("generated") or "",
-                evaluation.get("model") or "",
-                evaluation.get("findings_discovered"),
-                evaluation.get("findings_passed"),
-                evaluation.get("findings_rejected"),
-                evaluation.get("summary") or "",
-                evaluation.get("generated") or "",
-                str(final_path),
-            ),
-        )
-        self._conn.commit()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO evals
+                    (paper_id, pipeline_status, model,
+                     findings_discovered, findings_passed, findings_rejected,
+                     summary, generated, eval_json_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pid,
+                    evaluation.get("pipeline_status") or "",
+                    evaluation.get("model") or "",
+                    evaluation.get("findings_discovered"),
+                    evaluation.get("findings_passed"),
+                    evaluation.get("findings_rejected"),
+                    evaluation.get("summary") or "",
+                    evaluation.get("generated") or "",
+                    str(final_path),
+                ),
+            )
         return final_path
 
     def write_intermediate(self, paper_id: str, name: str, payload: Any) -> Path:
-        """Write an intermediate artifact JSON to disk."""
+        """Write an intermediate artifact JSON to disk atomically."""
         pid = paper_id.strip().upper()
-        path = self._workspace / f"{pid.lower()}.{name}.json"
-        path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+        return self._atomic_write_text(
+            self._workspace / f"{pid.lower()}.{name}.json",
+            json.dumps(payload, indent=2, ensure_ascii=False),
         )
-        return path
+
+    def record_source(self, paper_id: str, path: Path | str) -> None:
+        """Stamp ``path`` as ``source_file`` for ``paper_id``."""
+        pid = paper_id.strip().upper()
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+            )
+            self._conn.execute(
+                "UPDATE papers SET source_file = ? WHERE paper_id = ?",
+                (str(path), pid),
+            )
+
+    def record_markdown(
+        self, paper_id: str, path: Path | str, *, intent: str | None = None
+    ) -> None:
+        """Stamp ``path`` as ``markdown_path`` (and optionally ``intent``)."""
+        pid = paper_id.strip().upper()
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+            )
+            if intent:
+                self._conn.execute(
+                    "UPDATE papers SET markdown_path = ?, intent = ? "
+                    "WHERE paper_id = ?",
+                    (str(path), intent, pid),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE papers SET markdown_path = ? WHERE paper_id = ?",
+                    (str(path), pid),
+                )
+
+    _SOURCE_SUFFIXES = (".pdf", ".html", ".htm")
+
+    def reconcile(self) -> dict[str, int]:
+        """Backfill DB rows from on-disk artifacts. See ABC for semantics."""
+        sources: list[tuple[str, Path]] = []
+        markdowns: list[tuple[str, Path]] = []
+        evaluations: list[tuple[str, Path]] = []
+
+        for path in sorted(self._workspace.iterdir()):
+            if not path.is_file():
+                continue
+            name = path.name
+            if name == "papers.db" or name.startswith("papers.db-"):
+                continue
+            if name.endswith(".partial"):
+                continue
+            if name.endswith(".eval.json"):
+                evaluations.append((name[: -len(".eval.json")].upper(), path))
+                continue
+            if name.endswith(".json"):
+                # .meta.json, .prompts.json, .1-findings.json, .2-gate.json,
+                # .2c-suppressed.json -- intermediates, not indexed.
+                continue
+            if name.endswith(".md"):
+                markdowns.append((name[: -len(".md")].upper(), path))
+                continue
+            for suffix in self._SOURCE_SUFFIXES:
+                if name.endswith(suffix):
+                    sources.append((name[: -len(suffix)].upper(), path))
+                    break
+
+        counts = {"sources": 0, "markdowns": 0, "evaluations": 0}
+        with self._conn:
+            for pid, path in sources:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+                )
+                cursor = self._conn.execute(
+                    "UPDATE papers SET source_file = ? "
+                    "WHERE paper_id = ? AND source_file = ''",
+                    (str(path), pid),
+                )
+                if cursor.rowcount > 0:
+                    counts["sources"] += 1
+            for pid, path in markdowns:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+                )
+                cursor = self._conn.execute(
+                    "UPDATE papers SET markdown_path = ? "
+                    "WHERE paper_id = ? AND markdown_path = ''",
+                    (str(path), pid),
+                )
+                if cursor.rowcount > 0:
+                    counts["markdowns"] += 1
+            for pid, path in evaluations:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO papers (paper_id) VALUES (?)", (pid,)
+                )
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO evals (paper_id) VALUES (?)", (pid,)
+                )
+                cursor = self._conn.execute(
+                    "UPDATE evals SET eval_json_path = ? "
+                    "WHERE paper_id = ? AND eval_json_path = ''",
+                    (str(path), pid),
+                )
+                if cursor.rowcount > 0:
+                    counts["evaluations"] += 1
+        return counts
 
     # ---- reads ------------------------------------------------------------
 
@@ -391,6 +531,15 @@ class SqliteBackend(StorageBackend):
                 f"Evaluation file missing for {paper_id!r}: {path}."
             )
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_eval_status(self, paper_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT pipeline_status FROM evals WHERE paper_id = ?",
+            (paper_id.strip().upper(),),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["pipeline_status"] or None
 
     def list_years(self) -> list[tuple[str, int]]:
         """Return ``[(year, paper_count)]`` sorted by year."""

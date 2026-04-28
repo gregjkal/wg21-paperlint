@@ -185,8 +185,6 @@ async def run_download(
 
     semaphore = asyncio.Semaphore(concurrency)
 
-    workspace_dir = backend.workspace_dir
-
     async def _one(paper: dict) -> dict:
         pid = paper["paper_id"]
         url = paper.get("url", "")
@@ -196,17 +194,25 @@ async def run_download(
             if verify and paper.get("source_file"):
                 cl = content_length(url)
                 if cl is not None:
-                    existing = Path(paper["source_file"])
-                    if existing.exists() and existing.stat().st_size == cl:
+                    try:
+                        existing_size = Path(paper["source_file"]).stat().st_size
+                    except FileNotFoundError:
+                        existing_size = None
+                    if existing_size == cl:
                         return {"paper_id": pid, "status": "skipped", "reason": "verified_match"}
             try:
-                # Pass workspace_dir (not backend) - worker must not touch SQLite
-                path = await asyncio.to_thread(
-                    download_paper, pid, workspace_dir, source_url=url, refetch=refetch
+                fetched = await asyncio.to_thread(
+                    download_paper, pid, source_url=url
                 )
-                if path is None:
+                if fetched is None:
                     return {"paper_id": pid, "status": "skipped", "reason": "no_url"}
-                return {"paper_id": pid, "source_file": str(path), "status": "ok"}
+                content, suffix = fetched
+                return {
+                    "paper_id": pid,
+                    "content": content,
+                    "suffix": suffix,
+                    "status": "ok",
+                }
             except Exception as exc:
                 logger.exception("Download failed for %s", pid)
                 return {"paper_id": pid, "status": "error", "error": str(exc)}
@@ -214,13 +220,16 @@ async def run_download(
     tasks = [asyncio.create_task(_one(p)) for p in to_process]
     succeeded = []
     failed = []
+    to_process_ids = {p["paper_id"] for p in to_process}
     skipped_papers = [{"paper_id": p["paper_id"], "reason": "already_staged"}
-                      for p in all_papers if p not in to_process]
+                      for p in all_papers if p["paper_id"] not in to_process_ids]
 
     for coro in asyncio.as_completed(tasks):
         result = await coro
         if result["status"] == "ok":
-            backend._patch_fields(result["paper_id"], {"source_file": result["source_file"]})
+            backend.put_source(
+                result["paper_id"], result["content"], suffix=result["suffix"]
+            )
             succeeded.append(result["paper_id"])
         elif result["status"] == "skipped":
             skipped_papers.append(result)
@@ -288,11 +297,13 @@ async def run_convert(
         async with semaphore:
             try:
                 paper = _make_paper(paper_row)
-                # No backend passed - convert_one_paper does no SQLite access
+                # Worker reads the source but does no backend writes;
+                # the main coroutine persists through the backend below.
                 result = await asyncio.to_thread(convert_one_paper, paper)
                 return {
                     "paper_id": pid,
-                    "markdown_path": result.markdown_path,
+                    "markdown": result.markdown,
+                    "prompts": result.prompts,
                     "intent": result.intent,
                     "title": result.title,
                     "status": "ok",
@@ -311,16 +322,19 @@ async def run_convert(
     tasks = [asyncio.create_task(_one(p)) for p in to_process]
     succeeded = []
     failed = []
-    skipped = [p["paper_id"] for p in all_papers if p not in to_process]
+    to_process_ids = {p["paper_id"] for p in to_process}
+    skipped = [p["paper_id"] for p in all_papers if p["paper_id"] not in to_process_ids]
 
     for coro in asyncio.as_completed(tasks):
         result = await coro
         if result["status"] == "ok":
-            backend._patch_fields(result["paper_id"], {
-                "markdown_path": result["markdown_path"],
-                "intent": result["intent"],
-            })
-            succeeded.append(result["paper_id"])
+            pid = result["paper_id"]
+            md_path = backend.write_paper_md(pid, result["markdown"])
+            if result["prompts"]:
+                backend.write_intermediate(pid, "prompts", result["prompts"])
+            if result["intent"]:
+                backend.record_markdown(pid, md_path, intent=result["intent"])
+            succeeded.append(pid)
         elif result["status"] == "skipped":
             skipped.append(result)
         else:
@@ -349,17 +363,11 @@ async def run_eval(
 
     # Filter: only papers with markdown; skip already-complete unless refetch.
     if not refetch:
-        to_process = []
-        for p in all_papers:
-            if not p.get("markdown_path"):
-                continue
-            try:
-                ev = backend.get_evaluation(p["paper_id"])
-                if ev.get("pipeline_status") == "complete":
-                    continue
-            except Exception:
-                pass
-            to_process.append(p)
+        to_process = [
+            p for p in all_papers
+            if p.get("markdown_path")
+            and backend.get_eval_status(p["paper_id"]) != "complete"
+        ]
     else:
         to_process = [p for p in all_papers if p.get("markdown_path")]
 
@@ -384,7 +392,8 @@ async def run_eval(
     tasks = [asyncio.create_task(_one(p)) for p in to_process]
     succeeded = []
     failed = []
-    skipped = [p["paper_id"] for p in all_papers if p not in to_process]
+    to_process_ids = {p["paper_id"] for p in to_process}
+    skipped = [p["paper_id"] for p in all_papers if p["paper_id"] not in to_process_ids]
 
     for coro in asyncio.as_completed(tasks):
         result = await coro

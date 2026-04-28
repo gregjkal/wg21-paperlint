@@ -10,12 +10,12 @@
 """Tests for ``mailing.download.download_paper``.
 
 ``httpx.Client`` is monkeypatched so tests run hermetically.
-download_paper now takes workspace_dir (Path) instead of a StorageBackend.
+download_paper returns ``(content, suffix)`` and never writes to disk; the
+caller persists via ``StorageBackend.put_source``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,36 +41,32 @@ def _make_mock_client(content: bytes) -> MagicMock:
     return mock_client
 
 
-def test_download_paper_writes_pdf_to_workspace(tmp_path: Path):
+def test_download_paper_returns_bytes_and_pdf_suffix():
     pdf_bytes = b"%PDF-1.7\nhello"
 
     with patch("mailing.download.httpx.Client", return_value=_make_mock_client(pdf_bytes)):
-        path = md.download_paper(
+        result = md.download_paper(
             "p1234r0",
-            tmp_path,
             source_url="https://www.open-std.org/.../p1234r0.pdf",
         )
-    assert path == tmp_path / "p1234r0.pdf"
-    assert path.read_bytes() == pdf_bytes
+    assert result == (pdf_bytes, ".pdf")
 
 
-def test_download_paper_normalizes_htm_to_html(tmp_path: Path):
+def test_download_paper_normalizes_htm_to_html():
     html_bytes = b"<html>ok</html>"
 
     with patch("mailing.download.httpx.Client", return_value=_make_mock_client(html_bytes)):
-        path = md.download_paper(
+        result = md.download_paper(
             "n5000",
-            tmp_path,
             source_url="https://www.open-std.org/.../n5000.htm",
         )
-    assert path == tmp_path / "n5000.html"
+    assert result == (html_bytes, ".html")
 
 
-def test_download_paper_returns_none_for_empty_url(tmp_path: Path):
-    result = md.download_paper("p1", tmp_path, source_url="")
-    assert result is None
+def test_download_paper_returns_none_for_empty_url():
+    assert md.download_paper("p1", source_url="") is None
 
 
-def test_download_paper_rejects_unknown_suffix(tmp_path: Path):
+def test_download_paper_rejects_unknown_suffix():
     with pytest.raises(ValueError, match="must end with"):
-        md.download_paper("p1", tmp_path, source_url="https://x/paper.docx")
+        md.download_paper("p1", source_url="https://x/paper.docx")
