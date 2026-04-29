@@ -28,6 +28,7 @@ _log = logging.getLogger(__name__)
 
 _FRONT_MATTER_RE = re.compile(r"^---\n(.+?\n)---", re.DOTALL)
 _UNCERTAIN_MARKER = "tomd:uncertain"
+_LOSSY_TABLE_MARKER = "tomd:lossy-table"
 
 _FRONT_MATTER_FIELDS = frozenset({"title", "document", "date", "reply-to", "audience"})
 _WG21_DOC_NUM_RE = re.compile(r"[DPN]\d{3,5}R?\d*", re.IGNORECASE)
@@ -86,6 +87,7 @@ class QAMetrics:
     heading_level_skips: int = 0
     wording_section_count: int = 0
     table_parse_errors: int = 0
+    lossy_table_count: int = 0
     empty_output: bool = False
     score: int = 100
     issues: list[str] = field(default_factory=list)
@@ -162,19 +164,14 @@ _MOJIBAKE_BADNESS_THRESHOLD = 3
 
 _CODE_FENCE_RE = re.compile(r"^```.*?^```", re.MULTILINE | re.DOTALL)
 
-# Strip inline code spans (single and double backtick) before U+FFFD counting.
-# Must run AFTER _CODE_FENCE_RE to avoid consuming triple-backtick fences.
 _INLINE_CODE_RE = re.compile(r"``[^`]+``|`[^`]+`")
 
-# Papers whose title matches this regex discuss Unicode encoding and may
-# intentionally use U+FFFD as demonstration content, not corruption.
-# Design tradeoff: introduces topic-awareness into a format-agnostic scorer.
-# Justified because U+FFFD is the paper's SUBJECT, not extraction damage.
-# ftfy.badness() still runs independently as a safety net for real corruption.
+
 _UNICODE_TOPIC_RE = re.compile(
     r"utf|unicode|transcod|encoding|charconv|replacement.character",
     re.IGNORECASE,
 )
+
 
 
 def _count_mojibake(md_text: str) -> int:
@@ -273,6 +270,7 @@ def _count_table_parse_errors(tokens: list[dict]) -> int:
     return errors
 
 
+
 def compute_metrics(md_text: str, file: str = "") -> QAMetrics:
     """Compute QA metrics by parsing the Markdown output with mistune.
 
@@ -313,6 +311,11 @@ def compute_metrics(md_text: str, file: str = "") -> QAMetrics:
         if t["type"] == "block_html" and _UNCERTAIN_MARKER in t.get("raw", "")
     )
 
+    m.lossy_table_count = sum(
+        1 for t in tokens
+        if t["type"] == "block_html" and _LOSSY_TABLE_MARKER in t.get("raw", "")
+    )
+
     paragraphs = [t for t in tokens if t["type"] == "paragraph"]
     m.paragraph_count = len(paragraphs)
     m.unfenced_code_lines = _count_unfenced_code(paragraphs)
@@ -344,6 +347,9 @@ def _score(m: QAMetrics) -> tuple[int, list[str]]:
         penalty = min(20, 5 * m.uncertain_count)
         score -= penalty
         issues.append(f"{m.uncertain_count} uncertain regions")
+
+    if m.lossy_table_count > 0:
+        issues.append(f"{m.lossy_table_count} lossy tables")
 
     if m.heading_count == 0 and is_long:
         score -= 25
