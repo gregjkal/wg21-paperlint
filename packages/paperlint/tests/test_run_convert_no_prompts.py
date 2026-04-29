@@ -25,12 +25,10 @@ from paperlint.models import ConvertResult
 from paperstore.testing import store  # noqa: F401  (pytest fixture)
 
 
-def _seed_paper_with_source(backend, tmp_path: Path) -> str:
+def _seed_paper_with_source(backend) -> str:
     pid = "P1234R0"
     backend.upsert_year("2026", [{"paper_id": pid, "title": "Sample"}])
-    src = tmp_path / "p1234r0.pdf"
-    src.write_bytes(b"%PDF-1.4 stub")
-    backend.record_source(pid, src)
+    backend.put_source(pid, b"%PDF-1.4 stub", suffix=".pdf")
     return pid
 
 
@@ -56,7 +54,7 @@ def test_run_convert_write_prompts_gate(
         "paperlint.orchestrator.convert_one_paper", _stub_convert
     )
 
-    pid = _seed_paper_with_source(store, tmp_path)
+    pid = _seed_paper_with_source(store)
 
     asyncio.run(jobs.run_convert(
         [pid], store, force=True, concurrency=1, write_prompts=write_prompts,
