@@ -260,8 +260,20 @@ async def run_convert(
     *,
     force: bool = False,
     concurrency: int = 4,
+    write_prompts: bool = True,
+    on_total: Callable[[int], None] | None = None,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict:
-    """Convert staged source files to markdown. Workers run in threads."""
+    """Convert staged source files to markdown. Workers run in threads.
+
+    ``write_prompts`` controls whether the ``<pid>.prompts.json``
+    intermediate is persisted (default True). Set False from CLI flows
+    that explicitly opt out via ``--no-prompts``.
+
+    ``on_total`` is invoked once with the count of papers that will be
+    attempted (after idempotency filtering). ``on_progress`` is invoked
+    once per task completion with the worker's result dict.
+    """
     from paperlint.orchestrator import convert_one_paper
     from paperlint.models import Paper
 
@@ -273,6 +285,12 @@ async def run_convert(
                       if p.get("source_file") and not p.get("markdown_path")]
     else:
         to_process = [p for p in all_papers if p.get("source_file")]
+
+    if on_total is not None:
+        try:
+            on_total(len(to_process))
+        except Exception:
+            logger.warning("on_total progress hook raised; continuing", exc_info=True)
 
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -335,7 +353,7 @@ async def run_convert(
         if result["status"] == "ok":
             pid = result["paper_id"]
             md_path = backend.write_paper_md(pid, result["markdown"])
-            if result["prompts"]:
+            if write_prompts and result["prompts"]:
                 backend.write_intermediate(pid, "prompts", result["prompts"])
             if result["intent"]:
                 backend.record_markdown(pid, md_path, intent=result["intent"])
@@ -344,6 +362,12 @@ async def run_convert(
             skipped.append(result)
         else:
             failed.append(result)
+        if on_progress is not None:
+            try:
+                on_progress(result)
+            except Exception:
+                logger.warning("on_progress progress hook raised; disabling for remainder of run", exc_info=True)
+                on_progress = None
 
     return {"succeeded": succeeded, "skipped": skipped, "failed": failed}
 
