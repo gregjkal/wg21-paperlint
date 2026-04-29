@@ -7,11 +7,8 @@
 
 """Smoke tests for `paperflow convert --qa`.
 
-Mirrors the regression coverage previously held by
-``packages/tomd/tests/test_cli.py::test_tomd_qa_scores_pre_converted_md``:
 QA must score pre-written paper.md files without re-routing them through
-the PDF pipeline (an earlier refactor crashed by calling fitz.open on
-markdown input).
+the PDF pipeline (calling fitz.open on markdown input crashes).
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from paperstore import SqliteBackend
+from paperstore.testing import store  # noqa: F401  (pytest fixture)
 
 
 _SAMPLE_MD = """\
@@ -47,8 +44,7 @@ void foo() { return; }
 """
 
 
-def test_paperflow_convert_qa_scores_pre_converted_md(tmp_path: Path):
-    store = SqliteBackend(tmp_path)
+def test_paperflow_convert_qa_scores_pre_converted_md(store, tmp_path: Path):
     store.upsert_year("2026", [{"paper_id": "P1234R0", "title": "Sample"}])
     store.write_paper_md("P1234R0", _SAMPLE_MD)
 
@@ -68,8 +64,7 @@ def test_paperflow_convert_qa_scores_pre_converted_md(tmp_path: Path):
     assert "pipeline error" not in " ".join(payload[0].get("issues", []))
 
 
-def test_paperflow_convert_qa_skips_papers_without_md(tmp_path: Path):
-    store = SqliteBackend(tmp_path)
+def test_paperflow_convert_qa_skips_papers_without_md(store, tmp_path: Path):
     store.upsert_year("2026", [{"paper_id": "P9999R0", "title": "No Markdown"}])
 
     result = subprocess.run(
