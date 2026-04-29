@@ -29,7 +29,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from paperstore.backend import StorageBackend
-from paperstore.errors import MissingMailingIndexError, MissingSourceError
+from paperstore.errors import (
+    MissingMailingIndexError,
+    MissingPaperMdError,
+    MissingSourceError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -260,8 +264,20 @@ async def run_convert(
     *,
     force: bool = False,
     concurrency: int = 4,
+    write_prompts: bool = True,
+    on_total: Callable[[int], None] | None = None,
+    on_progress: Callable[[dict], None] | None = None,
 ) -> dict:
-    """Convert staged source files to markdown. Workers run in threads."""
+    """Convert staged source files to markdown. Workers run in threads.
+
+    ``write_prompts`` controls whether the ``<pid>.prompts.json``
+    intermediate is persisted (default True). Set False from CLI flows
+    that explicitly opt out via ``--no-prompts``.
+
+    ``on_total`` is invoked once with the count of papers that will be
+    attempted (after idempotency filtering). ``on_progress`` is invoked
+    once per task completion with the worker's result dict.
+    """
     from paperlint.orchestrator import convert_one_paper
     from paperlint.models import Paper
 
@@ -273,6 +289,12 @@ async def run_convert(
                       if p.get("source_file") and not p.get("markdown_path")]
     else:
         to_process = [p for p in all_papers if p.get("source_file")]
+
+    if on_total is not None:
+        try:
+            on_total(len(to_process))
+        except Exception:
+            logger.warning("on_total progress hook raised; continuing", exc_info=True)
 
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -335,7 +357,7 @@ async def run_convert(
         if result["status"] == "ok":
             pid = result["paper_id"]
             md_path = backend.write_paper_md(pid, result["markdown"])
-            if result["prompts"]:
+            if write_prompts and result["prompts"]:
                 backend.write_intermediate(pid, "prompts", result["prompts"])
             if result["intent"]:
                 backend.record_markdown(pid, md_path, intent=result["intent"])
@@ -344,8 +366,59 @@ async def run_convert(
             skipped.append(result)
         else:
             failed.append(result)
+        if on_progress is not None:
+            try:
+                on_progress(result)
+            except Exception:
+                logger.warning("on_progress progress hook raised; disabling for remainder of run", exc_info=True)
+                on_progress = None
 
     return {"succeeded": succeeded, "skipped": skipped, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# run_qa
+# ---------------------------------------------------------------------------
+
+def run_qa(
+    targets: list[str],
+    backend: StorageBackend,
+    *,
+    json_path: Path | None = None,
+    workers: int = 1,
+    timeout: int = 120,
+) -> dict:
+    """Score quality of converted markdown for the given targets.
+
+    Synchronous. ``run_qa_report`` does its own ProcessPoolExecutor
+    parallelism, so there is no per-row async work to overlap. Returns
+    ``{"succeeded": [paper_ids], "skipped": [{paper_id, reason}], "failed": []}``.
+    """
+    from tomd.lib.pdf.qa import run_qa_report
+
+    target_type = _validate_targets(targets)
+    rows = _papers_from_scope(targets, target_type, backend)
+
+    items: list[tuple[str, str]] = []
+    skipped: list[dict] = []
+    for row in rows:
+        pid = row["paper_id"]
+        try:
+            md = backend.get_paper_md(pid)
+        except MissingPaperMdError:
+            skipped.append({"paper_id": pid, "reason": "no_markdown"})
+            continue
+        items.append((pid, md))
+
+    if not items:
+        return {"succeeded": [], "skipped": skipped, "failed": []}
+
+    run_qa_report(items, json_path=json_path, workers=workers, timeout=timeout)
+    return {
+        "succeeded": [pid for pid, _ in items],
+        "skipped": skipped,
+        "failed": [],
+    }
 
 
 # ---------------------------------------------------------------------------

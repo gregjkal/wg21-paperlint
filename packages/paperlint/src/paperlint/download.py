@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from contextlib import nullcontext
 
 from paperstore.backend import StorageBackend
 
@@ -55,41 +54,9 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
 
 def command(args: argparse.Namespace, backend: StorageBackend) -> int:
     from paperlint.jobs import run_download
-    from rich.console import Console
-    from rich.progress import (
-        BarColumn,
-        MofNCompleteColumn,
-        Progress,
-        SpinnerColumn,
-        TaskProgressColumn,
-        TextColumn,
-        TimeElapsedColumn,
-    )
+    from paperlint.progress import progress_callbacks
 
-    console = Console()
-    on_total = None
-    on_progress = None
-    progress_ctx = nullcontext()
-
-    if console.is_terminal:
-        progress = Progress(
-            SpinnerColumn(style="green"),
-            TextColumn("[bold]{task.description}"),
-            BarColumn(complete_style="green", finished_style="bold green"),
-            TaskProgressColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        )
-        progress_ctx = progress
-        task_id = progress.add_task("Downloading", total=None, start=False)
-
-        def on_total(n: int) -> None:
-            progress.update(task_id, total=n)
-            progress.start_task(task_id)
-
-        def on_progress(_result: dict) -> None:
-            progress.advance(task_id)
+    progress_ctx, on_total, on_progress = progress_callbacks("Downloading")
 
     with progress_ctx:
         result = asyncio.run(run_download(

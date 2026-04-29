@@ -15,50 +15,56 @@ root:
 
 ```
 uv sync                       # installs all four packages + dev deps
-source .venv/bin/activate     # puts tomd, mailing, paperstore, paperlint on PATH
+source .venv/bin/activate     # puts paperflow on PATH
 ```
 
 Requires Python 3.12 or newer. Runtime dependencies (`pymupdf~=1.27`,
 `beautifulsoup4~=4.14`, `mistune~=3.2`) are declared in `pyproject.toml`
 and installed automatically. Outside an activated venv, prefix any command
-with `uv run` (`uv run tomd ...`).
+with `uv run`.
 
 ## Usage
 
-tomd reads sources staged in a paperstore workspace (run `mailing` first). Workspace dir defaults to `$PAPERFLOW_WORKSPACE` or `./data`; override per command with `--workspace-dir`.
+tomd is the conversion engine behind `paperflow convert`. Drive it through
+the paperflow CLI; sources must be staged in a paperstore workspace first
+(run `paperflow download` or `paperflow mailing` as needed). Workspace dir
+defaults to `$PAPERFLOW_WORKSPACE` or `./data`; override with
+`--workspace-dir`.
 
 ```
-tomd P3642R4                       # one paper
-tomd P3642R4 P3700R0               # multiple
-tomd 2026-04                       # every paper in mailing 2026-04
-tomd 2026-04 P3700R0               # mix mailing + paper ids
-tomd 2026-04 --qa                  # batch QA scoring
-tomd 2026-04 -v                    # verbose logging
-tomd 2026-04 --workspace-dir ./alt # explicit workspace override
+paperflow convert P3642R4                       # one paper
+paperflow convert P3642R4 P3700R0               # multiple
+paperflow convert 2026                          # every paper in year 2026
+paperflow convert all                           # everything not yet converted
+paperflow convert P3642R4 --force               # re-convert
+paperflow convert P3642R4 --no-prompts          # skip the prompts.json intermediate
 ```
 
-Mailing-id positionals (matching `YYYY-MM`) expand to every paper id in that mailing's index, in stored order. The mailing index must already exist on disk - run `mailing <id>` first, otherwise tomd raises `MissingMailingIndexError`.
+Conversion is idempotent: papers already at `<pid>.md` are skipped unless
+`--force` is set.
 
-The pre-0.2 file-path interface (`tomd input.pdf`) was removed.
+To use tomd directly from Python (e.g. for tests or custom pipelines),
+import `tomd.api.convert_paper`.
 
 ### QA mode
 
 Score conversion quality across a batch of papers without inspecting each
 output by hand. QA reads the markdown already written by a previous
-`tomd` run (via `paperstore.get_paper_md`), so convert first, then score:
+convert run, so convert first, then score:
 
 ```
-tomd 2026-04                                        # convert the corpus
-tomd 2026-04 --qa                                   # ranked report to stdout
-tomd 2026-04 --qa --qa-json report.json             # + detailed per-paper JSON
-tomd 2026-04 --qa --workers 16                      # parallel (16 processes)
-tomd 2026-04 --qa --workers 16 --timeout 180        # abort stragglers after 3m
+paperflow convert 2026                                       # convert the corpus
+paperflow convert 2026 --qa                                  # ranked report to stdout
+paperflow convert 2026 --qa --qa-json report.json            # + detailed per-paper JSON
+paperflow convert 2026 --qa --workers 16                     # parallel (16 processes)
+paperflow convert 2026 --qa --workers 16 --timeout 180       # abort stragglers after 3m
 ```
 
 Each paper's markdown is parsed with mistune and scored on heading structure,
 code block detection, front-matter completeness, uncertain regions, and
 unfenced code. The score is 0-100. Papers that haven't been converted yet
-are skipped with a pointer to run convert first.
+are skipped with a pointer to run convert first. QA is a dev/debug
+affordance: it never reconverts, only reads existing `<pid>.md`.
 
 ### Output
 
