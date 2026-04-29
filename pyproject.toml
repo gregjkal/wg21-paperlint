@@ -1,6 +1,6 @@
 [project]
 name = "wg21-paperflow"
-version = "0.1.0"
+version = "0.2.0"
 description = "WG21 paperflow monorepo: paperstore + mailing + tomd + paperlint"
 requires-python = ">=3.12"
 license = {text = "BSL-1.0"}
