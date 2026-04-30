@@ -108,3 +108,34 @@ def test_discover_years_parses_root(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse())
     years = discover_years()
     assert years == ["2024", "2025", "2026"]
+
+
+ROOT_PAGE_HTML_RELATIVE = """\
+<html><body>
+<ul>
+<li><a href="2026/">2026</a></li>
+<li><a href="2025/">2025</a></li>
+<li><a href="1989/">1989</a></li>
+<li><a href="index.html">index</a></li>
+<li><a href="archive2024/">archive2024</a></li>
+</ul>
+</body></html>
+"""
+
+
+def test_discover_years_parses_root_relative_hrefs(monkeypatch):
+    """The live open-std.org root serves relative hrefs like ``<a href="2026/">``.
+
+    Regression: the old absolute-only pattern returned ``[]`` against this layout.
+    """
+    import requests
+
+    class FakeResponse:
+        status_code = 200
+        text = ROOT_PAGE_HTML_RELATIVE
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: FakeResponse())
+    years = discover_years()
+    assert years == ["1989", "2025", "2026"]

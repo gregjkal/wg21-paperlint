@@ -250,7 +250,7 @@ def parse_all_mailings(
     return result
 
 
-_YEAR_LINK_RE = re.compile(r"/papers/(\d{4})/?$")
+_YEAR_LINK_RE = re.compile(r"(?:^|/)(\d{4})/?$")
 
 
 def _fetch_year_page(year: str, *, timeout: float = 60.0) -> tuple[str, str]:
